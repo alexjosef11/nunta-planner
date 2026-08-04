@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "(test -x node_modules/.bin/vite || npm ci --include=dev) && vite build",
     "preview": "vite preview"
   },
   "dependencies": {
