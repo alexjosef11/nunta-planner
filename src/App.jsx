@@ -666,13 +666,13 @@ function VendorsModule() {
   const [availability, setAvailability] = useSharedState("wedding_availability", [])
   const [combos, setCombos] = useSharedState("wedding_combos", [])
   const [modal, setModal] = useState(null)
-  const emptyVendor = { name: "", category: "Sală / Restaurant", contactPerson: "", phone: "", email: "", status: "de contactat", notes: "", budgetItemId: "", offerAmount: "" }
+  const emptyVendor = { name: "", category: "Sală / Restaurant", contactPerson: "", phone: "", email: "", status: "de contactat", notes: "", budgetItemId: "", offers: [] }
   const [form, setForm] = useState(emptyVendor)
 
   useLockBodyScroll(Boolean(modal))
 
   const openAdd = () => { setForm(emptyVendor); setModal("add") }
-  const openEdit = (v) => { setForm({ ...emptyVendor, ...v }); setModal(v) }
+  const openEdit = (v) => { setForm({ ...emptyVendor, ...v, offers: v.offers || [] }); setModal(v) }
   const save = () => {
     if (!form.name.trim()) return
     if (modal === "add") setVendors(prev => [...prev, { ...form, id: Date.now() }])
@@ -680,6 +680,10 @@ function VendorsModule() {
     setModal(null)
   }
   const remove = (id) => { if (window.confirm("Ștergi furnizorul?")) setVendors(prev => prev.filter(v => v.id !== id)) }
+
+  const addOfferRow = () => setForm(p => ({ ...p, offers: [...(p.offers || []), { id: Date.now() + Math.random(), label: "", amount: "" }] }))
+  const updateOfferRow = (id, field, value) => setForm(p => ({ ...p, offers: p.offers.map(o => o.id === id ? { ...o, [field]: value } : o) }))
+  const removeOfferRow = (id) => setForm(p => ({ ...p, offers: p.offers.filter(o => o.id !== id) }))
 
   const cycleAvailability = (vendorId, date) => {
     const current = availability.find(a => a.vendorId === vendorId && a.date === date)?.status || null
@@ -691,16 +695,22 @@ function VendorsModule() {
   }
   const availDates = [...new Set(availability.map(a => a.date))].sort()
 
-  const activeCats = VENDOR_CATS.filter(cat => vendors.some(v => v.category === cat))
-  const vendorsInCat = (cat) => vendors.filter(v => v.category === cat)
-  const addCombo = () => setCombos(prev => [...prev, { id: Date.now(), name: `Varianta ${prev.length + 1}`, picks: {} }])
+  const [pendingPick, setPendingPick] = useState({})
+  const offerOptions = vendors.flatMap(v => (v.offers || []).filter(o => o.amount).map(o => ({
+    vendorId: v.id, offerId: o.id, amount: parseFloat(o.amount) || 0,
+    label: `${v.name} — ${o.label || "Ofertă"} (${fmtRON(o.amount)})`
+  })))
+  const addCombo = () => setCombos(prev => [...prev, { id: Date.now(), name: `Varianta ${prev.length + 1}`, items: [] }])
   const removeCombo = (id) => setCombos(prev => prev.filter(c => c.id !== id))
   const renameCombo = (id, name) => setCombos(prev => prev.map(c => c.id === id ? { ...c, name } : c))
-  const setPick = (id, cat, vendorId) => setCombos(prev => prev.map(c => c.id === id ? { ...c, picks: { ...c.picks, [cat]: vendorId } } : c))
-  const comboTotal = (combo) => Object.values(combo.picks).reduce((sum, vendorId) => {
-    const v = vendors.find(vv => String(vv.id) === String(vendorId))
-    return sum + (v ? parseFloat(v.offerAmount) || 0 : 0)
-  }, 0)
+  const addComboItem = (comboId, vendorId, offerId) => setCombos(prev => prev.map(c => c.id === comboId ? { ...c, items: [...(c.items || []), { id: Date.now(), vendorId, offerId }] } : c))
+  const removeComboItem = (comboId, itemId) => setCombos(prev => prev.map(c => c.id === comboId ? { ...c, items: (c.items || []).filter(it => it.id !== itemId) } : c))
+  const findOffer = (it) => {
+    const v = vendors.find(vv => String(vv.id) === String(it.vendorId))
+    const o = v?.offers?.find(oo => String(oo.id) === String(it.offerId))
+    return { v, o }
+  }
+  const comboTotal = (combo) => (combo.items || []).reduce((sum, it) => { const { o } = findOffer(it); return sum + (o ? parseFloat(o.amount) || 0 : 0) }, 0)
 
   const budgetItemLabel = (id) => {
     const it = budgetItems.find(b => String(b.id) === String(id))
@@ -710,7 +720,7 @@ function VendorsModule() {
   }
 
   const exportVendors = () => {
-    const rows = vendors.map(v => ({ "Nume": v.name, "Categorie": v.category, "Persoană contact": v.contactPerson || "", "Telefon": v.phone || "", "Email": v.email || "", "Status": v.status, "Ofertă (RON)": parseFloat(v.offerAmount) || 0, "Cheltuială asociată": budgetItemLabel(v.budgetItemId) || "", "Note": v.notes || "" }))
+    const rows = vendors.map(v => ({ "Nume": v.name, "Categorie": v.category, "Persoană contact": v.contactPerson || "", "Telefon": v.phone || "", "Email": v.email || "", "Status": v.status, "Oferte": (v.offers || []).filter(o => o.amount).map(o => `${o.label || "Ofertă"}: ${fmtRON(o.amount)}`).join("; "), "Cheltuială asociată": budgetItemLabel(v.budgetItemId) || "", "Note": v.notes || "" }))
     exportToExcel([{ name: "Furnizori", data: rows.length ? rows : [{ Info: "Niciun furnizor" }] }], "furnizori-nunta.xlsx")
   }
 
@@ -758,7 +768,9 @@ function VendorsModule() {
                   </div>
                   <div style={{ display: "flex", gap: 5, flexWrap: "wrap", alignItems: "center" }}>
                     <span style={S.badge(statusColor(v.status))}>{v.status}</span>
-                    {v.offerAmount && <span style={S.badge("sage")}>💶 Ofertă: {fmtRON(v.offerAmount)}</span>}
+                    {(v.offers || []).filter(o => o.amount).map(o => (
+                      <span key={o.id} style={S.badge("sage")}>💶 {o.label || "Ofertă"}: {fmtRON(o.amount)}</span>
+                    ))}
                     {budgetItemLabel(v.budgetItemId) && <span style={S.badge("gold")}>💰 {budgetItemLabel(v.budgetItemId)}</span>}
                     {v.email && <span style={{ fontSize: 11, color: C.textDim }}>{v.email}</span>}
                   </div>
@@ -813,42 +825,46 @@ function VendorsModule() {
           <span style={S.cardTitle}>Calculator combinații</span>
           <button style={S.btn("purple")} onClick={addCombo}><PlusIcon /> Combinație nouă</button>
         </div>
-        <div style={{ padding: "10px 20px", overflowX: "auto" }}>
-          {activeCats.length === 0 && <div style={{ fontSize: 13, color: C.textDim }}>Adaugă furnizori mai întâi.</div>}
-          {activeCats.length > 0 && combos.length === 0 && <div style={{ fontSize: 13, color: C.textDim }}>Adaugă o combinație ca să compari costuri totale (ex: sala X + muzică Y).</div>}
-          {activeCats.length > 0 && combos.length > 0 && (
-            <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 220 + activeCats.length * 180 }}>
-              <thead>
-                <tr>
-                  <th style={{ textAlign: "left", padding: "6px 10px 6px 4px", fontSize: 11, color: C.textDim, borderBottom: `1px solid ${C.border}` }}>Combinație</th>
-                  {activeCats.map(cat => <th key={cat} style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: C.textDim, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>{cat}</th>)}
-                  <th style={{ textAlign: "right", padding: "6px 8px", fontSize: 11, color: C.textDim, borderBottom: `1px solid ${C.border}` }}>Total</th>
-                  <th style={{ borderBottom: `1px solid ${C.border}` }} />
-                </tr>
-              </thead>
-              <tbody>
-                {combos.map(combo => (
-                  <tr key={combo.id}>
-                    <td style={{ padding: "6px 10px 6px 4px", borderBottom: `1px solid ${C.border}` }}>
-                      <input style={{ ...S.input, padding: "6px 8px", fontSize: 13, minWidth: 110 }} value={combo.name} onChange={e => renameCombo(combo.id, e.target.value)} />
-                    </td>
-                    {activeCats.map(cat => (
-                      <td key={cat} style={{ padding: "6px 8px", borderBottom: `1px solid ${C.border}` }}>
-                        <select style={{ ...S.select, fontSize: 12, padding: "6px 8px", minWidth: 150 }} value={combo.picks[cat] || ""} onChange={e => setPick(combo.id, cat, e.target.value)}>
-                          <option value="">—</option>
-                          {vendorsInCat(cat).map(v => <option key={v.id} value={v.id}>{v.name}{v.offerAmount ? ` (${fmtRON(v.offerAmount)})` : ""}</option>)}
-                        </select>
-                      </td>
-                    ))}
-                    <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 800, fontSize: 14, color: C.accent, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>{fmtRON(comboTotal(combo))}</td>
-                    <td style={{ borderBottom: `1px solid ${C.border}` }}>
-                      <button style={{ ...S.btn("ghost"), padding: "4px 6px", color: C.danger }} onClick={() => removeCombo(combo.id)}><TrashIcon size={14} /></button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+        <div style={{ padding: "10px 20px" }}>
+          {offerOptions.length === 0 && <div style={{ fontSize: 13, color: C.textDim }}>Adaugă oferte la furnizori mai întâi (secțiunea „Oferte primite" din fiecare furnizor).</div>}
+          {offerOptions.length > 0 && combos.length === 0 && <div style={{ fontSize: 13, color: C.textDim }}>Adaugă o combinație și pune în ea câți furnizori/oferte vrei, ca să compari costuri totale (ex: sala X + muzică Y).</div>}
+          {combos.map(combo => (
+            <div key={combo.id} style={{ background: C.surfaceHi, border: `1px solid ${C.border}`, borderRadius: 12, padding: 14, marginBottom: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+                <input style={{ ...S.input, flex: 1, minWidth: 120, fontWeight: 700 }} value={combo.name} onChange={e => renameCombo(combo.id, e.target.value)} />
+                <span style={{ fontSize: 15, fontWeight: 800, color: C.accent, whiteSpace: "nowrap" }}>{fmtRON(comboTotal(combo))}</span>
+                <button style={{ ...S.btn("ghost"), padding: "4px 6px", color: C.danger }} onClick={() => removeCombo(combo.id)}><TrashIcon size={14} /></button>
+              </div>
+              {(combo.items || []).length === 0 && <div style={{ fontSize: 12, color: C.textDim, marginBottom: 8 }}>Nimic adăugat încă.</div>}
+              {(combo.items || []).map(it => {
+                const { v, o } = findOffer(it)
+                return (
+                  <div key={it.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 0", borderBottom: `1px solid ${C.border}`, gap: 8 }}>
+                    <span style={{ fontSize: 13, minWidth: 0 }}>{v && o ? `${v.name} — ${o.label || "Ofertă"}` : "(șters)"}</span>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                      <span style={{ fontSize: 13, color: C.textSec }}>{fmtRON(o?.amount)}</span>
+                      <button style={{ ...S.btn("ghost"), padding: "2px 4px", color: C.danger }} onClick={() => removeComboItem(combo.id, it.id)}><XIcon size={14} /></button>
+                    </div>
+                  </div>
+                )
+              })}
+              {offerOptions.length > 0 && (
+                <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                  <select style={{ ...S.select, flex: 1, fontSize: 12 }} value={pendingPick[combo.id] || ""} onChange={e => setPendingPick(p => ({ ...p, [combo.id]: e.target.value }))}>
+                    <option value="">Alege furnizor + ofertă...</option>
+                    {offerOptions.map(o => <option key={`${o.vendorId}:${o.offerId}`} value={`${o.vendorId}:${o.offerId}`}>{o.label}</option>)}
+                  </select>
+                  <button style={S.btn("sage")} onClick={() => {
+                    const val = pendingPick[combo.id]
+                    if (!val) return
+                    const [vendorId, offerId] = val.split(":")
+                    addComboItem(combo.id, vendorId, offerId)
+                    setPendingPick(p => ({ ...p, [combo.id]: "" }))
+                  }}>Adaugă</button>
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       </div>
 
@@ -871,8 +887,18 @@ function VendorsModule() {
               <div style={S.col(1)}><label style={S.label}>Status</label><select style={S.select} value={form.status} onChange={e => setForm(p => ({ ...p, status: e.target.value }))}>{VENDOR_STATUS.map(s => <option key={s}>{s}</option>)}</select></div>
             </div>
             <div style={S.formGroup}>
-              <label style={S.label}>Ofertă primită (RON)</label>
-              <input style={S.input} type="number" min={0} placeholder="ex: 15000" value={form.offerAmount} onChange={e => setForm(p => ({ ...p, offerAmount: e.target.value }))} />
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                <label style={S.label}>Oferte primite ({(form.offers || []).length}/3)</label>
+                {(form.offers || []).length < 3 && <button style={S.btn("ghost")} onClick={addOfferRow}><PlusIcon /> Adaugă ofertă</button>}
+              </div>
+              {(form.offers || []).length === 0 && <div style={{ fontSize: 12, color: C.textDim }}>Nicio ofertă notată încă.</div>}
+              {(form.offers || []).map(o => (
+                <div key={o.id} style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center" }}>
+                  <input style={{ ...S.input, flex: 2 }} placeholder="ex: Pachet clasic" value={o.label} onChange={e => updateOfferRow(o.id, "label", e.target.value)} />
+                  <input style={{ ...S.input, flex: 1 }} type="number" min={0} placeholder="RON" value={o.amount} onChange={e => updateOfferRow(o.id, "amount", e.target.value)} />
+                  <button style={{ ...S.btn("ghost"), padding: "4px 6px", color: C.danger }} onClick={() => removeOfferRow(o.id)}><XIcon size={14} /></button>
+                </div>
+              ))}
             </div>
             <div style={S.formGroup}>
               <label style={S.label}>Cheltuială asociată (din Buget)</label>
