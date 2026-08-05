@@ -41,6 +41,13 @@ const CalculatorIcon = ({ size = 18 }) => (
     <path d="M8 13h.01M12 13h.01M16 13h.01M8 17h.01M12 17h.01M16 17h.01" strokeWidth={2.4} />
   </svg>
 )
+const GripIcon = ({ size = 16 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor">
+    <circle cx="9" cy="6" r="1.6" /><circle cx="15" cy="6" r="1.6" />
+    <circle cx="9" cy="12" r="1.6" /><circle cx="15" cy="12" r="1.6" />
+    <circle cx="9" cy="18" r="1.6" /><circle cx="15" cy="18" r="1.6" />
+  </svg>
+)
 
 // ─── EXCEL EXPORT ─────────────────────────────────────────────────────────────
 function exportToExcel(sheets, filename) {
@@ -54,6 +61,36 @@ function exportToExcel(sheets, filename) {
     XLSX.utils.book_append_sheet(wb, ws, name)
   })
   XLSX.writeFile(wb, filename)
+}
+
+// ─── DRAG REORDER (shared) ─────────────────────────────────────────────────────
+function reorderArray(arr, fromId, toId) {
+  const fromIdx = arr.findIndex(x => String(x.id) === String(fromId))
+  const toIdx = arr.findIndex(x => String(x.id) === String(toId))
+  if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return arr
+  const next = arr.slice()
+  const [moved] = next.splice(fromIdx, 1)
+  next.splice(toIdx, 0, moved)
+  return next
+}
+function startListDrag(e, draggedId, onReorderTo) {
+  e.preventDefault()
+  const scopeEl = e.currentTarget.closest("[data-drag-scope]")
+  if (!scopeEl) return
+  const onMove = (ev) => {
+    const rows = Array.from(scopeEl.querySelectorAll("[data-drag-id]"))
+    if (rows.length === 0) return
+    const y = ev.clientY
+    const target = rows.find(r => { const rect = r.getBoundingClientRect(); return y < rect.top + rect.height / 2 })
+    const targetId = target ? target.dataset.dragId : rows[rows.length - 1].dataset.dragId
+    if (targetId && String(targetId) !== String(draggedId)) onReorderTo(targetId)
+  }
+  const onUp = () => {
+    window.removeEventListener("pointermove", onMove)
+    window.removeEventListener("pointerup", onUp)
+  }
+  window.addEventListener("pointermove", onMove)
+  window.addEventListener("pointerup", onUp)
 }
 
 // ─── PALETTE ─────────────────────────────────────────────────────────────────
@@ -97,6 +134,7 @@ const globalStyles = `
 // ─── STYLES ───────────────────────────────────────────────────────────────────
 const S = {
   app: { minHeight: "100vh", background: C.bg, color: C.textPri },
+  dragHandle: (enabled) => ({ cursor: enabled ? "grab" : "default", touchAction: "none", color: enabled ? C.textDim : C.border, flexShrink: 0, display: "flex", alignItems: "center", padding: "4px 2px" }),
   topbar: { background: C.surface + "EE", borderBottom: `1px solid ${C.border}`, padding: "0 20px", position: "sticky", top: 0, zIndex: 200, backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)" },
   topbarInner: { maxWidth: 1160, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", height: 56 },
   logo: { display: "flex", alignItems: "center", gap: 8, color: C.accent, fontSize: 16, fontWeight: 700, letterSpacing: "-0.01em" },
@@ -210,6 +248,8 @@ function GuestsModule() {
   const [search, setSearch] = useState("")
   const [filter, setFilter] = useState("all")
   const [page, setPage] = useState(1)
+  const [guestSort, setGuestSort] = useState("manual")
+  const [guestDisplay, setGuestDisplay] = useState("paged")
   const [modal, setModal] = useState(null)
   const [groupModal, setGroupModal] = useState(null)
   const [groupForm, setGroupForm] = useState({ name: "" })
@@ -248,6 +288,7 @@ function GuestsModule() {
     setModal(null)
   }
   const remove = (id) => { if (window.confirm("Ștergi invitatul?")) setGuests(prev => prev.filter(g => g.id !== id)) }
+  const reorderGuest = (fromId, toId) => setGuests(prev => reorderArray(prev, fromId, toId))
 
   const openAddGroup = () => { setGroupForm({ name: "" }); setGroupMemberSearch(""); setNumTables("1"); setGenMsg(""); setGroupModal("add") }
   const openGroupDetail = (id) => {
@@ -310,9 +351,11 @@ function GuestsModule() {
     const mf = filter === "all" || g.rsvp === filter || g.side === filter || String(g.groupId) === String(filter)
     return ms && mf
   })
-  const pageCount = Math.max(1, Math.ceil(filtered.length / GUESTS_PAGE_SIZE))
+  const filteredSorted = guestSort === "alpha" ? filtered.slice().sort((a, b) => a.name.localeCompare(b.name, "ro")) : filtered
+  const dragEnabled = guestSort === "manual" && search === "" && filter === "all"
+  const pageCount = Math.max(1, Math.ceil(filteredSorted.length / GUESTS_PAGE_SIZE))
   const pageSafe = Math.min(page, pageCount)
-  const paged = filtered.slice((pageSafe - 1) * GUESTS_PAGE_SIZE, pageSafe * GUESTS_PAGE_SIZE)
+  const paged = guestDisplay === "full" ? filteredSorted : filteredSorted.slice((pageSafe - 1) * GUESTS_PAGE_SIZE, pageSafe * GUESTS_PAGE_SIZE)
   const rsvpColor = (r) => r === "confirmat" ? "sage" : r === "refuzat" ? "danger" : "neutral"
   const groupName = (id) => groups.find(g => String(g.id) === String(id))?.name
   const currentGroup = (groupModal && groupModal !== "add") ? groups.find(g => g.id === groupModal) : null
@@ -372,12 +415,32 @@ function GuestsModule() {
             {groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
           </select>
         </div>
-        <div style={{ padding: "10px 20px" }}>
+        <div style={{ padding: "10px 20px 0", borderBottom: `1px solid ${C.border}`, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <label style={{ fontSize: 11, color: C.textDim }}>Sortare</label>
+            <select style={{ ...S.select, width: "auto", fontSize: 12, padding: "7px 10px" }} value={guestSort} onChange={e => setGuestSort(e.target.value)}>
+              <option value="manual">Manual (drag)</option>
+              <option value="alpha">Alfabetic A-Z</option>
+            </select>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <label style={{ fontSize: 11, color: C.textDim }}>Afișare</label>
+            <select style={{ ...S.select, width: "auto", fontSize: 12, padding: "7px 10px" }} value={guestDisplay} onChange={e => setGuestDisplay(e.target.value)}>
+              <option value="paged">Paginat</option>
+              <option value="full">Listă completă</option>
+            </select>
+          </div>
+          {!dragEnabled && <span style={{ fontSize: 11, color: C.textDim, marginBottom: 10 }}>Reordonarea manuală merge doar fără căutare/filtru și cu sortare Manual.</span>}
+        </div>
+        <div style={{ padding: "10px 20px" }} data-drag-scope="guests">
           {!synced && <div style={S.emptyState}><div className="spin" style={{ width: 24, height: 24, border: `2px solid ${C.border}`, borderTopColor: C.accent, borderRadius: "50%", margin: "0 auto 12px" }} /></div>}
-          {synced && filtered.length === 0 && <div style={S.emptyState}><div style={{ fontSize: 28, marginBottom: 8, opacity: 0.3 }}>💌</div><div style={{ fontSize: 13 }}>{guests.length === 0 ? "Adaugă primul invitat." : "Niciun rezultat."}</div></div>}
+          {synced && filteredSorted.length === 0 && <div style={S.emptyState}><div style={{ fontSize: 28, marginBottom: 8, opacity: 0.3 }}>💌</div><div style={{ fontSize: 13 }}>{guests.length === 0 ? "Adaugă primul invitat." : "Niciun rezultat."}</div></div>}
           {synced && paged.map((g, i) => (
-            <div key={g.id} style={{ ...S.row2(i), flexDirection: "column", alignItems: "stretch", gap: 6 }}>
+            <div key={g.id} data-drag-id={g.id} style={{ ...S.row2(i), flexDirection: "column", alignItems: "stretch", gap: 6 }}>
               <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+                {dragEnabled && (
+                  <div style={S.dragHandle(true)} onPointerDown={e => startListDrag(e, g.id, targetId => reorderGuest(g.id, targetId))}><GripIcon /></div>
+                )}
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontWeight: 600, fontSize: 14 }}>{g.name}</div>
                   {(g.companions || []).length > 0 && <div style={{ fontSize: 11, color: C.textDim, marginTop: 2 }}>+ {g.companions.map(c => `${c.name} (${c.type})`).join(", ")}</div>}
@@ -397,10 +460,12 @@ function GuestsModule() {
               </div>
             </div>
           ))}
-          {synced && filtered.length > 0 && (
+          {synced && guestDisplay === "paged" && filteredSorted.length > 0 && (
             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, marginTop: 14, paddingTop: 12, borderTop: `1px solid ${C.border}` }}>
               <button style={S.btn("outline")} disabled={pageSafe <= 1} onClick={() => setPage(p => Math.max(1, p - 1))}>‹ Anterior</button>
-              <span style={{ fontSize: 12, color: C.textDim }}>Pagina {pageSafe} / {pageCount}</span>
+              <select style={{ ...S.select, width: "auto", fontSize: 12, padding: "7px 10px" }} value={pageSafe} onChange={e => setPage(parseInt(e.target.value))}>
+                {Array.from({ length: pageCount }, (_, i) => i + 1).map(n => <option key={n} value={n}>Pagina {n} / {pageCount}</option>)}
+              </select>
               <button style={S.btn("outline")} disabled={pageSafe >= pageCount} onClick={() => setPage(p => Math.min(pageCount, p + 1))}>Următor ›</button>
             </div>
           )}
@@ -559,6 +624,7 @@ function TodoModule() {
   }
   const toggle = (id) => setTasks(prev => prev.map(t => t.id === id ? { ...t, done: !t.done } : t))
   const remove = (id) => setTasks(prev => prev.filter(t => t.id !== id))
+  const reorderTask = (fromId, toId) => setTasks(prev => reorderArray(prev, fromId, toId))
 
   const exportTodos = () => {
     const rows = tasks.map(t => ({ "Task": t.title, "Categorie": t.category, "Perioadă": t.timeframe, "Prioritate": t.priority, "Status": t.done ? "✓ Completat" : "În așteptare", "Note": t.notes || "" }))
@@ -599,10 +665,11 @@ function TodoModule() {
           {!synced && <div style={S.emptyState}><div className="spin" style={{ width: 24, height: 24, border: `2px solid ${C.border}`, borderTopColor: C.accent, borderRadius: "50%", margin: "0 auto" }} /></div>}
           {synced && tasks.length === 0 && <div style={S.emptyState}><div style={{ fontSize: 28, marginBottom: 8, opacity: 0.3 }}>📋</div><div style={{ fontSize: 13 }}>Adaugă primul task.</div></div>}
           {Object.entries(grouped).map(([tf, items]) => (
-            <div key={tf} style={{ marginBottom: 16 }}>
+            <div key={tf} style={{ marginBottom: 16 }} data-drag-scope={`todo-${tf}`}>
               <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em", color: C.gold, marginBottom: 6, paddingLeft: 2, fontWeight: 700 }}>◆ {tf}</div>
               {items.map((t, i) => (
-                <div key={t.id} style={{ ...S.row2(i), gap: 10 }}>
+                <div key={t.id} data-drag-id={t.id} style={{ ...S.row2(i), gap: 10 }}>
+                  <div style={S.dragHandle(true)} onPointerDown={e => startListDrag(e, t.id, targetId => reorderTask(t.id, targetId))}><GripIcon size={14} /></div>
                   <div style={S.checkCircle(t.done)} onClick={() => toggle(t.id)}>
                     {t.done && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3"><polyline points="20 6 9 17 4 12" /></svg>}
                   </div>
@@ -686,6 +753,7 @@ function VendorsModule() {
     setModal(null)
   }
   const remove = (id) => { if (window.confirm("Ștergi furnizorul?")) setVendors(prev => prev.filter(v => v.id !== id)) }
+  const reorderVendor = (fromId, toId) => setVendors(prev => reorderArray(prev, fromId, toId))
 
   const addOfferRow = () => setForm(p => ({ ...p, offers: [...(p.offers || []), { id: Date.now() + Math.random(), label: "", amount: "" }] }))
   const updateOfferRow = (id, field, value) => setForm(p => ({ ...p, offers: p.offers.map(o => o.id === id ? { ...o, [field]: value } : o) }))
@@ -737,11 +805,12 @@ function VendorsModule() {
           {!synced && <div style={S.emptyState}><div className="spin" style={{ width: 24, height: 24, border: `2px solid ${C.border}`, borderTopColor: C.accent, borderRadius: "50%", margin: "0 auto" }} /></div>}
           {synced && vendors.length === 0 && <div style={S.emptyState}><div style={{ fontSize: 28, marginBottom: 8, opacity: 0.3 }}>🤝</div><div style={{ fontSize: 13 }}>Adaugă primul furnizor.</div></div>}
           {Object.entries(grouped).map(([cat, its]) => (
-            <div key={cat} style={{ marginBottom: 16 }}>
+            <div key={cat} style={{ marginBottom: 16 }} data-drag-scope={`vendors-${cat}`}>
               <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em", color: C.gold, marginBottom: 6, paddingLeft: 2, fontWeight: 700 }}>◆ {cat}</div>
               {its.map((v, i) => (
-                <div key={v.id} style={{ ...S.row2(i), flexDirection: "column", alignItems: "stretch", gap: 6 }}>
+                <div key={v.id} data-drag-id={v.id} style={{ ...S.row2(i), flexDirection: "column", alignItems: "stretch", gap: 6 }}>
                   <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+                    <div style={S.dragHandle(true)} onPointerDown={e => startListDrag(e, v.id, targetId => reorderVendor(v.id, targetId))}><GripIcon size={14} /></div>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 600, fontSize: 14 }}>{v.name}</div>
                       {(v.contactPerson || v.phone) && (
@@ -1450,6 +1519,7 @@ function BudgetModule() {
     setModal(null)
   }
   const remove = (id) => { if (window.confirm("Ștergi cheltuiala?")) setItems(prev => prev.filter(it => it.id !== id)) }
+  const reorderItem = (fromId, toId) => setItems(prev => reorderArray(prev, fromId, toId))
 
   const exportBudget = () => {
     const rows = items.map(it => ({ "Descriere": it.name, "Categorie": it.category, "Furnizor": it.vendor || "", "Estimat (RON)": parseFloat(it.estimated) || 0, "Plătit (RON)": parseFloat(it.paid) || 0, "Diferență": (parseFloat(it.estimated) || 0) - (parseFloat(it.paid) || 0), "Status": it.paymentStatus, "Note": it.notes || "" }))
@@ -1517,13 +1587,14 @@ function BudgetModule() {
             const catEst = its.reduce((s, it) => s + (parseFloat(it.estimated) || 0), 0)
             const catPaid = its.reduce((s, it) => s + (parseFloat(it.paid) || 0), 0)
             return (
-              <div key={cat} style={{ marginBottom: 18 }}>
+              <div key={cat} style={{ marginBottom: 18 }} data-drag-scope={`budget-${cat}`}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
                   <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em", color: C.gold, fontWeight: 700 }}>◆ {cat}</div>
                   <div style={{ fontSize: 11, color: C.textDim }}>Est: {fmt(catEst)} · Plătit: {fmt(catPaid)}</div>
                 </div>
                 {its.map((it, i) => (
-                  <div key={it.id} style={{ ...S.row2(i), flexWrap: "wrap" }}>
+                  <div key={it.id} data-drag-id={it.id} style={{ ...S.row2(i), flexWrap: "wrap" }}>
+                    <div style={S.dragHandle(true)} onPointerDown={e => startListDrag(e, it.id, targetId => reorderItem(it.id, targetId))}><GripIcon size={14} /></div>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 600, fontSize: 14 }}>{it.name}</div>
                       {it.vendor && <div style={{ fontSize: 11, color: C.textDim, marginTop: 1 }}>Furnizor: {it.vendor}</div>}
