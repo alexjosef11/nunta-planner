@@ -28,6 +28,12 @@ const BriefcaseIcon = ({ size = 18 }) => (
     <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16M2 13h20" />
   </svg>
 )
+const CalendarIcon = ({ size = 18 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="4" width="18" height="18" rx="2" />
+    <path d="M16 2v4M8 2v4M3 10h18" />
+  </svg>
+)
 
 // ─── EXCEL EXPORT ─────────────────────────────────────────────────────────────
 function exportToExcel(sheets, filename) {
@@ -526,14 +532,18 @@ const TIMEFRAMES = ["12+ luni", "9-12 luni", "6-9 luni", "3-6 luni", "1-3 luni",
 
 function TodoModule() {
   const [tasks, setTasks, synced] = useSharedState("wedding_todos", [])
+  const [vendors] = useSharedState("wedding_vendors", [])
   const [modal, setModal] = useState(null)
   const [filterCat, setFilterCat] = useState("all")
-  const [form, setForm] = useState({ title: "", category: "Venue", timeframe: "6-9 luni", priority: "normal", notes: "" })
+  const emptyTask = { title: "", category: "Venue", timeframe: "6-9 luni", priority: "normal", notes: "", vendorId: "" }
+  const [form, setForm] = useState(emptyTask)
 
   useLockBodyScroll(Boolean(modal))
 
-  const openAdd = () => { setForm({ title: "", category: "Venue", timeframe: "6-9 luni", priority: "normal", notes: "" }); setModal("add") }
-  const openEdit = (t) => { setForm({ ...t }); setModal(t) }
+  const vendorName = (id) => vendors.find(v => String(v.id) === String(id))?.name
+
+  const openAdd = () => { setForm(emptyTask); setModal("add") }
+  const openEdit = (t) => { setForm({ ...emptyTask, ...t }); setModal(t) }
   const save = () => {
     if (!form.title.trim()) return
     if (modal === "add") setTasks(prev => [...prev, { ...form, id: Date.now(), done: false }])
@@ -594,6 +604,7 @@ function TodoModule() {
                     <div style={{ display: "flex", gap: 5, marginTop: 3, flexWrap: "wrap" }}>
                       <span style={S.badge("rose")}>{t.category}</span>
                       {t.priority !== "normal" && <span style={S.badge(pColor(t.priority))}>{t.priority}</span>}
+                      {vendorName(t.vendorId) && <span style={S.badge("purple")}>🤝 {vendorName(t.vendorId)}</span>}
                       {t.notes && <span style={{ fontSize: 11, color: C.textDim }}>{t.notes}</span>}
                     </div>
                   </div>
@@ -619,6 +630,13 @@ function TodoModule() {
               <div style={S.col(1)}><label style={S.label}>Perioadă</label><select style={S.select} value={form.timeframe} onChange={e => setForm(p => ({ ...p, timeframe: e.target.value }))}>{TIMEFRAMES.map(m => <option key={m}>{m}</option>)}</select></div>
             </div>
             <div style={S.formGroup}><label style={S.label}>Prioritate</label><select style={S.select} value={form.priority} onChange={e => setForm(p => ({ ...p, priority: e.target.value }))}><option value="normal">Normal</option><option value="important">Important</option><option value="urgent">Urgent</option></select></div>
+            <div style={S.formGroup}>
+              <label style={S.label}>Furnizor asociat (opțional)</label>
+              <select style={S.select} value={form.vendorId} onChange={e => setForm(p => ({ ...p, vendorId: e.target.value }))}>
+                <option value="">— Fără —</option>
+                {vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+              </select>
+            </div>
             <div style={S.formGroup}><label style={S.label}>Note</label><textarea style={{ ...S.input, height: 64, resize: "vertical" }} value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} /></div>
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
               <button style={S.btn("outline")} onClick={() => setModal(null)}>Anulează</button>
@@ -634,10 +652,15 @@ function TodoModule() {
 // ─── VENDORS MODULE ───────────────────────────────────────────────────────────
 const VENDOR_CATS = ["Sală / Restaurant", "Catering", "Foto & Video", "Muzică", "Flori & Decor", "Oficiant / Formalități", "Transport", "Frumusețe", "Altele"]
 const VENDOR_STATUS = ["de contactat", "contactat", "ofertă primită", "rezervat", "confirmat"]
+function fmtDateRo(dateStr) {
+  const [y, m, d] = dateStr.split("-").map(Number)
+  return `${d}.${m}.${y}`
+}
 
 function VendorsModule() {
   const [vendors, setVendors, synced] = useSharedState("wedding_vendors", [])
   const [budgetItems] = useSharedState("wedding_budget", [])
+  const [availability, setAvailability] = useSharedState("wedding_availability", [])
   const [modal, setModal] = useState(null)
   const emptyVendor = { name: "", category: "Sală / Restaurant", contactPerson: "", phone: "", email: "", status: "de contactat", notes: "", budgetItemId: "" }
   const [form, setForm] = useState(emptyVendor)
@@ -653,6 +676,16 @@ function VendorsModule() {
     setModal(null)
   }
   const remove = (id) => { if (window.confirm("Ștergi furnizorul?")) setVendors(prev => prev.filter(v => v.id !== id)) }
+
+  const cycleAvailability = (vendorId, date) => {
+    const current = availability.find(a => a.vendorId === vendorId && a.date === date)?.status || null
+    const next = current === "liber" ? "ocupat" : current === "ocupat" ? null : "liber"
+    setAvailability(prev => {
+      const filtered = prev.filter(a => !(a.vendorId === vendorId && a.date === date))
+      return next ? [...filtered, { id: Date.now(), vendorId, date, status: next }] : filtered
+    })
+  }
+  const availDates = [...new Set(availability.map(a => a.date))].sort()
 
   const budgetItemLabel = (id) => {
     const it = budgetItems.find(b => String(b.id) === String(id))
@@ -721,6 +754,44 @@ function VendorsModule() {
         </div>
       </div>
 
+      <div style={S.card}>
+        <div style={S.cardHeader}>
+          <span style={S.cardTitle}>Matrice disponibilitate</span>
+          <span style={{ fontSize: 11, color: C.textDim }}>Bifează aici sau din tab-ul Disponibilitate</span>
+        </div>
+        <div style={{ padding: "10px 20px", overflowX: "auto" }}>
+          {vendors.length === 0 && <div style={{ fontSize: 13, color: C.textDim }}>Adaugă furnizori mai întâi.</div>}
+          {vendors.length > 0 && availDates.length === 0 && <div style={{ fontSize: 13, color: C.textDim }}>Nimic bifat încă — deschide tab-ul Disponibilitate ca să marchezi o dată pentru un furnizor.</div>}
+          {vendors.length > 0 && availDates.length > 0 && (
+            <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 200 + availDates.length * 90 }}>
+              <thead>
+                <tr>
+                  <th style={{ textAlign: "left", padding: "6px 10px 6px 4px", fontSize: 11, color: C.textDim, borderBottom: `1px solid ${C.border}` }}>Furnizor</th>
+                  {availDates.map(d => <th key={d} style={{ padding: "6px 8px", fontSize: 11, color: C.textDim, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>{fmtDateRo(d)}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {vendors.map(v => (
+                  <tr key={v.id}>
+                    <td style={{ padding: "6px 10px 6px 4px", fontSize: 13, fontWeight: 600, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>{v.name}</td>
+                    {availDates.map(d => {
+                      const status = availability.find(a => a.vendorId === v.id && a.date === d)?.status || null
+                      return (
+                        <td key={d} style={{ padding: "4px 8px", textAlign: "center", borderBottom: `1px solid ${C.border}` }}>
+                          <button style={{ ...S.btn(status === "liber" ? "sage" : status === "ocupat" ? "danger" : "outline"), padding: "4px 10px", minWidth: 64, justifyContent: "center" }} onClick={() => cycleAvailability(v.id, d)}>
+                            {status === "liber" ? "Liber" : status === "ocupat" ? "Ocupat" : "—"}
+                          </button>
+                        </td>
+                      )
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+
       {modal && (
         <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) setModal(null) }}>
           <div className="modal-box">
@@ -750,6 +821,129 @@ function VendorsModule() {
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
               <button style={S.btn("outline")} onClick={() => setModal(null)}>Anulează</button>
               <button style={S.btn("primary")} onClick={save}>Salvează</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── AVAILABILITY MODULE ───────────────────────────────────────────────────────
+const RO_MONTHS = ["Ianuarie", "Februarie", "Martie", "Aprilie", "Mai", "Iunie", "Iulie", "August", "Septembrie", "Octombrie", "Noiembrie", "Decembrie"]
+const RO_WEEKDAYS = ["L", "Ma", "Mi", "J", "V", "S", "D"]
+
+function pad2(n) { return String(n).padStart(2, "0") }
+function isoDate(y, m, d) { return `${y}-${pad2(m + 1)}-${pad2(d)}` }
+function monthGridDays(year, month) {
+  const firstWeekday = (new Date(year, month, 1).getDay() + 6) % 7
+  const daysInMonth = new Date(year, month + 1, 0).getDate()
+  const cells = []
+  for (let i = 0; i < firstWeekday; i++) cells.push(null)
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d)
+  return cells
+}
+
+function AvailabilityModule() {
+  const [availability, setAvailability] = useSharedState("wedding_availability", [])
+  const [vendors] = useSharedState("wedding_vendors", [])
+  const today = new Date()
+  const [view, setView] = useState({ y: today.getFullYear(), m: today.getMonth() })
+  const [dayModal, setDayModal] = useState(null)
+
+  useLockBodyScroll(Boolean(dayModal))
+
+  const cycleAvailability = (vendorId, date) => {
+    const current = availability.find(a => a.vendorId === vendorId && a.date === date)?.status || null
+    const next = current === "liber" ? "ocupat" : current === "ocupat" ? null : "liber"
+    setAvailability(prev => {
+      const filtered = prev.filter(a => !(a.vendorId === vendorId && a.date === date))
+      return next ? [...filtered, { id: Date.now(), vendorId, date, status: next }] : filtered
+    })
+  }
+
+  const dayStatuses = (date) => availability.filter(a => a.date === date)
+  const todayIso = isoDate(today.getFullYear(), today.getMonth(), today.getDate())
+  const cells = monthGridDays(view.y, view.m)
+  const prevMonth = () => setView(v => v.m === 0 ? { y: v.y - 1, m: 11 } : { y: v.y, m: v.m - 1 })
+  const nextMonth = () => setView(v => v.m === 11 ? { y: v.y + 1, m: 0 } : { y: v.y, m: v.m + 1 })
+
+  return (
+    <div className="fadeup">
+      <div style={S.card}>
+        <div style={S.cardHeader}>
+          <span style={S.cardTitle}>Disponibilitate furnizori</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <button style={{ ...S.btn("ghost"), padding: "4px 8px" }} onClick={prevMonth}>‹</button>
+            <span style={{ fontSize: 13, fontWeight: 700, minWidth: 130, textAlign: "center" }}>{RO_MONTHS[view.m]} {view.y}</span>
+            <button style={{ ...S.btn("ghost"), padding: "4px 8px" }} onClick={nextMonth}>›</button>
+          </div>
+        </div>
+        <div style={{ padding: "14px 20px" }}>
+          {vendors.length === 0 && <div style={{ fontSize: 13, color: C.textDim, marginBottom: 12 }}>Adaugă furnizori în tab-ul Furnizori ca să poți bifa disponibilitate.</div>}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4, marginBottom: 6 }}>
+            {RO_WEEKDAYS.map(w => <div key={w} style={{ textAlign: "center", fontSize: 10, color: C.textDim, fontWeight: 700, textTransform: "uppercase" }}>{w}</div>)}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4 }}>
+            {cells.map((d, i) => {
+              if (d === null) return <div key={i} />
+              const date = isoDate(view.y, view.m, d)
+              const statuses = dayStatuses(date)
+              const hasOcupat = statuses.some(s => s.status === "ocupat")
+              const hasLiber = statuses.some(s => s.status === "liber")
+              const isToday = date === todayIso
+              return (
+                <button
+                  key={i}
+                  onClick={() => setDayModal(date)}
+                  disabled={vendors.length === 0}
+                  style={{
+                    aspectRatio: "1", borderRadius: 10, border: `1.5px solid ${isToday ? C.accent : C.border}`,
+                    background: C.surfaceHi, color: C.textPri, cursor: vendors.length === 0 ? "default" : "pointer", display: "flex", flexDirection: "column",
+                    alignItems: "center", justifyContent: "center", gap: 3, padding: 2, fontFamily: "inherit"
+                  }}
+                >
+                  <span style={{ fontSize: 12, fontWeight: isToday ? 800 : 500 }}>{d}</span>
+                  {(hasLiber || hasOcupat) && (
+                    <div style={{ display: "flex", gap: 2 }}>
+                      {hasLiber && <div style={{ width: 5, height: 5, borderRadius: "50%", background: C.sage }} />}
+                      {hasOcupat && <div style={{ width: 5, height: 5, borderRadius: "50%", background: C.danger }} />}
+                    </div>
+                  )}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      </div>
+
+      {dayModal && (
+        <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) setDayModal(null) }}>
+          <div className="modal-box">
+            <div className="modal-handle" />
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <div style={S.modalTitle}>{fmtDateRo(dayModal)}</div>
+              <button style={{ ...S.btn("ghost"), padding: 4 }} onClick={() => setDayModal(null)}><XIcon /></button>
+            </div>
+            {vendors.length === 0 && <div style={{ fontSize: 13, color: C.textDim }}>Niciun furnizor adăugat încă.</div>}
+            <div style={{ maxHeight: 420, overflowY: "auto" }}>
+              {vendors.map(v => {
+                const status = availability.find(a => a.vendorId === v.id && a.date === dayModal)?.status || null
+                return (
+                  <div key={v.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 4px", borderBottom: `1px solid ${C.border}`, gap: 10 }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600 }}>{v.name}</div>
+                      <div style={{ fontSize: 11, color: C.textDim }}>{v.category}</div>
+                    </div>
+                    <button
+                      style={{ ...S.btn(status === "liber" ? "sage" : status === "ocupat" ? "danger" : "outline"), minWidth: 84, justifyContent: "center", flexShrink: 0 }}
+                      onClick={() => cycleAvailability(v.id, dayModal)}
+                    >
+                      {status === "liber" ? "Liber" : status === "ocupat" ? "Ocupat" : "Nu știu"}
+                    </button>
+                  </div>
+                )
+              })}
             </div>
           </div>
         </div>
@@ -1213,6 +1407,7 @@ const TABS = [
   { id: "guests",  label: "Invitați",  Icon: UsersIcon    },
   { id: "todo",    label: "To-do",     Icon: CheckIcon    },
   { id: "vendors", label: "Furnizori", Icon: BriefcaseIcon },
+  { id: "avail",   label: "Disponibilitate", Icon: CalendarIcon },
   { id: "seating", label: "Plan mese", Icon: TableIcon    },
   { id: "budget",  label: "Buget",     Icon: WalletIcon   },
 ]
@@ -1272,6 +1467,7 @@ export default function App() {
         {tab === "guests"  && <GuestsModule />}
         {tab === "todo"    && <TodoModule />}
         {tab === "vendors" && <VendorsModule />}
+        {tab === "avail"   && <AvailabilityModule />}
         {tab === "seating" && <SeatingModule />}
         {tab === "budget"  && <BudgetModule />}
       </main>
