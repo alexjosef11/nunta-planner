@@ -700,6 +700,7 @@ function VendorsModule() {
     })
   }
   const availDates = [...new Set(availability.map(a => a.date))].sort()
+  const vendorsWithAvailability = vendors.filter(v => availability.some(a => a.vendorId === v.id))
 
   const budgetItemLabel = (id) => {
     const it = budgetItems.find(b => String(b.id) === String(id))
@@ -779,8 +780,8 @@ function VendorsModule() {
         </div>
         <div style={{ padding: "10px 20px", overflowX: "auto" }}>
           {vendors.length === 0 && <div style={{ fontSize: 13, color: C.textDim }}>Adaugă furnizori mai întâi.</div>}
-          {vendors.length > 0 && availDates.length === 0 && <div style={{ fontSize: 13, color: C.textDim }}>Nimic bifat încă — deschide tab-ul Disponibilitate ca să marchezi o dată pentru un furnizor.</div>}
-          {vendors.length > 0 && availDates.length > 0 && (
+          {vendors.length > 0 && vendorsWithAvailability.length === 0 && <div style={{ fontSize: 13, color: C.textDim }}>Nimic bifat încă — deschide tab-ul Disponibilitate ca să marchezi o dată pentru un furnizor.</div>}
+          {vendorsWithAvailability.length > 0 && (
             <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 200 + availDates.length * 90 }}>
               <thead>
                 <tr>
@@ -789,7 +790,7 @@ function VendorsModule() {
                 </tr>
               </thead>
               <tbody>
-                {vendors.map(v => (
+                {vendorsWithAvailability.map(v => (
                   <tr key={v.id}>
                     <td style={{ padding: "6px 10px 6px 4px", fontSize: 13, fontWeight: 600, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>{v.name}</td>
                     {availDates.map(d => {
