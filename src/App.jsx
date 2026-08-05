@@ -34,6 +34,13 @@ const CalendarIcon = ({ size = 18 }) => (
     <path d="M16 2v4M8 2v4M3 10h18" />
   </svg>
 )
+const CalculatorIcon = ({ size = 18 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="4" y="2" width="16" height="20" rx="2" />
+    <rect x="7" y="5" width="10" height="4" />
+    <path d="M8 13h.01M12 13h.01M16 13h.01M8 17h.01M12 17h.01M16 17h.01" strokeWidth={2.4} />
+  </svg>
+)
 
 // ─── EXCEL EXPORT ─────────────────────────────────────────────────────────────
 function exportToExcel(sheets, filename) {
@@ -664,9 +671,8 @@ function VendorsModule() {
   const [vendors, setVendors, synced] = useSharedState("wedding_vendors", [])
   const [budgetItems] = useSharedState("wedding_budget", [])
   const [availability, setAvailability] = useSharedState("wedding_availability", [])
-  const [combos, setCombos] = useSharedState("wedding_combos", [])
   const [modal, setModal] = useState(null)
-  const emptyVendor = { name: "", category: "Sală / Restaurant", contactPerson: "", phone: "", email: "", status: "de contactat", notes: "", budgetItemId: "", offers: [] }
+  const emptyVendor = { name: "", category: "Sală / Restaurant", contactPerson: "", phone: "", email: "", status: "de contactat", notes: "", budgetItemId: "", offers: [], attachmentUrl: "" }
   const [form, setForm] = useState(emptyVendor)
 
   useLockBodyScroll(Boolean(modal))
@@ -695,23 +701,6 @@ function VendorsModule() {
   }
   const availDates = [...new Set(availability.map(a => a.date))].sort()
 
-  const [pendingPick, setPendingPick] = useState({})
-  const offerOptions = vendors.flatMap(v => (v.offers || []).filter(o => o.amount).map(o => ({
-    vendorId: v.id, offerId: o.id, amount: parseFloat(o.amount) || 0,
-    label: `${v.name} — ${o.label || "Ofertă"} (${fmtRON(o.amount)})`
-  })))
-  const addCombo = () => setCombos(prev => [...prev, { id: Date.now(), name: `Varianta ${prev.length + 1}`, items: [] }])
-  const removeCombo = (id) => setCombos(prev => prev.filter(c => c.id !== id))
-  const renameCombo = (id, name) => setCombos(prev => prev.map(c => c.id === id ? { ...c, name } : c))
-  const addComboItem = (comboId, vendorId, offerId) => setCombos(prev => prev.map(c => c.id === comboId ? { ...c, items: [...(c.items || []), { id: Date.now(), vendorId, offerId }] } : c))
-  const removeComboItem = (comboId, itemId) => setCombos(prev => prev.map(c => c.id === comboId ? { ...c, items: (c.items || []).filter(it => it.id !== itemId) } : c))
-  const findOffer = (it) => {
-    const v = vendors.find(vv => String(vv.id) === String(it.vendorId))
-    const o = v?.offers?.find(oo => String(oo.id) === String(it.offerId))
-    return { v, o }
-  }
-  const comboTotal = (combo) => (combo.items || []).reduce((sum, it) => { const { o } = findOffer(it); return sum + (o ? parseFloat(o.amount) || 0 : 0) }, 0)
-
   const budgetItemLabel = (id) => {
     const it = budgetItems.find(b => String(b.id) === String(id))
     if (!it) return null
@@ -720,7 +709,7 @@ function VendorsModule() {
   }
 
   const exportVendors = () => {
-    const rows = vendors.map(v => ({ "Nume": v.name, "Categorie": v.category, "Persoană contact": v.contactPerson || "", "Telefon": v.phone || "", "Email": v.email || "", "Status": v.status, "Oferte": (v.offers || []).filter(o => o.amount).map(o => `${o.label || "Ofertă"}: ${fmtRON(o.amount)}`).join("; "), "Cheltuială asociată": budgetItemLabel(v.budgetItemId) || "", "Note": v.notes || "" }))
+    const rows = vendors.map(v => ({ "Nume": v.name, "Categorie": v.category, "Persoană contact": v.contactPerson || "", "Telefon": v.phone || "", "Email": v.email || "", "Status": v.status, "Oferte": (v.offers || []).filter(o => o.amount).map(o => `${o.label || "Ofertă"}: ${fmtRON(o.amount)}`).join("; "), "Atașament": v.attachmentUrl || "", "Cheltuială asociată": budgetItemLabel(v.budgetItemId) || "", "Note": v.notes || "" }))
     exportToExcel([{ name: "Furnizori", data: rows.length ? rows : [{ Info: "Niciun furnizor" }] }], "furnizori-nunta.xlsx")
   }
 
@@ -772,6 +761,7 @@ function VendorsModule() {
                       <span key={o.id} style={S.badge("sage")}>💶 {o.label || "Ofertă"}: {fmtRON(o.amount)}</span>
                     ))}
                     {budgetItemLabel(v.budgetItemId) && <span style={S.badge("gold")}>💰 {budgetItemLabel(v.budgetItemId)}</span>}
+                    {v.attachmentUrl && <a href={v.attachmentUrl} target="_blank" rel="noopener noreferrer" style={{ ...S.badge("purple"), textDecoration: "none" }}>📎 Atașament</a>}
                     {v.email && <span style={{ fontSize: 11, color: C.textDim }}>{v.email}</span>}
                   </div>
                   {v.notes && <div style={{ fontSize: 11, color: C.textDim }}>{v.notes}</div>}
@@ -820,13 +810,92 @@ function VendorsModule() {
         </div>
       </div>
 
+      {modal && (
+        <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) setModal(null) }}>
+          <div className="modal-box">
+            <div className="modal-handle" />
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <div style={S.modalTitle}>{modal === "add" ? "Furnizor nou" : "Editează furnizor"}</div>
+              <button style={{ ...S.btn("ghost"), padding: 4 }} onClick={() => setModal(null)}><XIcon /></button>
+            </div>
+            <div style={S.formGroup}><label style={S.label}>Nume firmă *</label><input style={S.input} placeholder="ex: Sala Regal" value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} /></div>
+            <div style={S.formGroup}><label style={S.label}>Categorie</label><select style={S.select} value={form.category} onChange={e => setForm(p => ({ ...p, category: e.target.value }))}>{VENDOR_CATS.map(c => <option key={c}>{c}</option>)}</select></div>
+            <div style={{ ...S.row, marginBottom: 14 }}>
+              <div style={S.col(1)}><label style={S.label}>Persoană de contact</label><input style={S.input} placeholder="ex: Ana Popescu" value={form.contactPerson} onChange={e => setForm(p => ({ ...p, contactPerson: e.target.value }))} /></div>
+              <div style={S.col(1)}><label style={S.label}>Telefon</label><input style={S.input} placeholder="07xx..." value={form.phone} onChange={e => setForm(p => ({ ...p, phone: e.target.value }))} /></div>
+            </div>
+            <div style={{ ...S.row, marginBottom: 14 }}>
+              <div style={S.col(1)}><label style={S.label}>Email</label><input style={S.input} placeholder="contact@..." value={form.email} onChange={e => setForm(p => ({ ...p, email: e.target.value }))} /></div>
+              <div style={S.col(1)}><label style={S.label}>Status</label><select style={S.select} value={form.status} onChange={e => setForm(p => ({ ...p, status: e.target.value }))}>{VENDOR_STATUS.map(s => <option key={s}>{s}</option>)}</select></div>
+            </div>
+            <div style={S.formGroup}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                <label style={S.label}>Oferte primite ({(form.offers || []).length}/3)</label>
+                {(form.offers || []).length < 3 && <button style={S.btn("ghost")} onClick={addOfferRow}><PlusIcon /> Adaugă ofertă</button>}
+              </div>
+              {(form.offers || []).length === 0 && <div style={{ fontSize: 12, color: C.textDim }}>Nicio ofertă notată încă.</div>}
+              {(form.offers || []).map(o => (
+                <div key={o.id} style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center" }}>
+                  <input style={{ ...S.input, flex: 2 }} placeholder="ex: Pachet clasic" value={o.label} onChange={e => updateOfferRow(o.id, "label", e.target.value)} />
+                  <input style={{ ...S.input, flex: 1 }} type="number" min={0} placeholder="RON" value={o.amount} onChange={e => updateOfferRow(o.id, "amount", e.target.value)} />
+                  <button style={{ ...S.btn("ghost"), padding: "4px 6px", color: C.danger }} onClick={() => removeOfferRow(o.id)}><XIcon size={14} /></button>
+                </div>
+              ))}
+            </div>
+            <div style={S.formGroup}>
+              <label style={S.label}>Cheltuială asociată (din Buget)</label>
+              <select style={S.select} value={form.budgetItemId} onChange={e => setForm(p => ({ ...p, budgetItemId: e.target.value }))}>
+                <option value="">— Fără —</option>
+                {budgetItems.map(it => <option key={it.id} value={it.id}>{it.name}</option>)}
+              </select>
+            </div>
+            <div style={S.formGroup}>
+              <label style={S.label}>Link atașament (PDF, poze etc.)</label>
+              <input style={S.input} placeholder="link Google Drive, Dropbox, atașament email..." value={form.attachmentUrl} onChange={e => setForm(p => ({ ...p, attachmentUrl: e.target.value }))} />
+            </div>
+            <div style={S.formGroup}><label style={S.label}>Note</label><textarea style={{ ...S.input, height: 140, resize: "vertical" }} value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} /></div>
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button style={S.btn("outline")} onClick={() => setModal(null)}>Anulează</button>
+              <button style={S.btn("primary")} onClick={save}>Salvează</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── COMBO CALCULATOR MODULE ───────────────────────────────────────────────────
+function ComboModule() {
+  const [vendors] = useSharedState("wedding_vendors", [])
+  const [combos, setCombos] = useSharedState("wedding_combos", [])
+  const [pendingPick, setPendingPick] = useState({})
+
+  const offerOptions = vendors.flatMap(v => (v.offers || []).filter(o => o.amount).map(o => ({
+    vendorId: v.id, offerId: o.id, amount: parseFloat(o.amount) || 0,
+    label: `${v.name} — ${o.label || "Ofertă"} (${fmtRON(o.amount)})`
+  })))
+  const addCombo = () => setCombos(prev => [...prev, { id: Date.now(), name: `Varianta ${prev.length + 1}`, items: [] }])
+  const removeCombo = (id) => setCombos(prev => prev.filter(c => c.id !== id))
+  const renameCombo = (id, name) => setCombos(prev => prev.map(c => c.id === id ? { ...c, name } : c))
+  const addComboItem = (comboId, vendorId, offerId) => setCombos(prev => prev.map(c => c.id === comboId ? { ...c, items: [...(c.items || []), { id: Date.now(), vendorId, offerId }] } : c))
+  const removeComboItem = (comboId, itemId) => setCombos(prev => prev.map(c => c.id === comboId ? { ...c, items: (c.items || []).filter(it => it.id !== itemId) } : c))
+  const findOffer = (it) => {
+    const v = vendors.find(vv => String(vv.id) === String(it.vendorId))
+    const o = v?.offers?.find(oo => String(oo.id) === String(it.offerId))
+    return { v, o }
+  }
+  const comboTotal = (combo) => (combo.items || []).reduce((sum, it) => { const { o } = findOffer(it); return sum + (o ? parseFloat(o.amount) || 0 : 0) }, 0)
+
+  return (
+    <div className="fadeup">
       <div style={S.card}>
         <div style={S.cardHeader}>
           <span style={S.cardTitle}>Calculator combinații</span>
           <button style={S.btn("purple")} onClick={addCombo}><PlusIcon /> Combinație nouă</button>
         </div>
         <div style={{ padding: "10px 20px" }}>
-          {offerOptions.length === 0 && <div style={{ fontSize: 13, color: C.textDim }}>Adaugă oferte la furnizori mai întâi (secțiunea „Oferte primite" din fiecare furnizor).</div>}
+          {offerOptions.length === 0 && <div style={{ fontSize: 13, color: C.textDim }}>Adaugă oferte la furnizori mai întâi (secțiunea „Oferte primite" din fiecare furnizor, tab Furnizori).</div>}
           {offerOptions.length > 0 && combos.length === 0 && <div style={{ fontSize: 13, color: C.textDim }}>Adaugă o combinație și pune în ea câți furnizori/oferte vrei, ca să compari costuri totale (ex: sala X + muzică Y).</div>}
           {combos.map(combo => (
             <div key={combo.id} style={{ background: C.surfaceHi, border: `1px solid ${C.border}`, borderRadius: 12, padding: 14, marginBottom: 12 }}>
@@ -867,54 +936,6 @@ function VendorsModule() {
           ))}
         </div>
       </div>
-
-      {modal && (
-        <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) setModal(null) }}>
-          <div className="modal-box">
-            <div className="modal-handle" />
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-              <div style={S.modalTitle}>{modal === "add" ? "Furnizor nou" : "Editează furnizor"}</div>
-              <button style={{ ...S.btn("ghost"), padding: 4 }} onClick={() => setModal(null)}><XIcon /></button>
-            </div>
-            <div style={S.formGroup}><label style={S.label}>Nume firmă *</label><input style={S.input} placeholder="ex: Sala Regal" value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} /></div>
-            <div style={S.formGroup}><label style={S.label}>Categorie</label><select style={S.select} value={form.category} onChange={e => setForm(p => ({ ...p, category: e.target.value }))}>{VENDOR_CATS.map(c => <option key={c}>{c}</option>)}</select></div>
-            <div style={{ ...S.row, marginBottom: 14 }}>
-              <div style={S.col(1)}><label style={S.label}>Persoană de contact</label><input style={S.input} placeholder="ex: Ana Popescu" value={form.contactPerson} onChange={e => setForm(p => ({ ...p, contactPerson: e.target.value }))} /></div>
-              <div style={S.col(1)}><label style={S.label}>Telefon</label><input style={S.input} placeholder="07xx..." value={form.phone} onChange={e => setForm(p => ({ ...p, phone: e.target.value }))} /></div>
-            </div>
-            <div style={{ ...S.row, marginBottom: 14 }}>
-              <div style={S.col(1)}><label style={S.label}>Email</label><input style={S.input} placeholder="contact@..." value={form.email} onChange={e => setForm(p => ({ ...p, email: e.target.value }))} /></div>
-              <div style={S.col(1)}><label style={S.label}>Status</label><select style={S.select} value={form.status} onChange={e => setForm(p => ({ ...p, status: e.target.value }))}>{VENDOR_STATUS.map(s => <option key={s}>{s}</option>)}</select></div>
-            </div>
-            <div style={S.formGroup}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                <label style={S.label}>Oferte primite ({(form.offers || []).length}/3)</label>
-                {(form.offers || []).length < 3 && <button style={S.btn("ghost")} onClick={addOfferRow}><PlusIcon /> Adaugă ofertă</button>}
-              </div>
-              {(form.offers || []).length === 0 && <div style={{ fontSize: 12, color: C.textDim }}>Nicio ofertă notată încă.</div>}
-              {(form.offers || []).map(o => (
-                <div key={o.id} style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center" }}>
-                  <input style={{ ...S.input, flex: 2 }} placeholder="ex: Pachet clasic" value={o.label} onChange={e => updateOfferRow(o.id, "label", e.target.value)} />
-                  <input style={{ ...S.input, flex: 1 }} type="number" min={0} placeholder="RON" value={o.amount} onChange={e => updateOfferRow(o.id, "amount", e.target.value)} />
-                  <button style={{ ...S.btn("ghost"), padding: "4px 6px", color: C.danger }} onClick={() => removeOfferRow(o.id)}><XIcon size={14} /></button>
-                </div>
-              ))}
-            </div>
-            <div style={S.formGroup}>
-              <label style={S.label}>Cheltuială asociată (din Buget)</label>
-              <select style={S.select} value={form.budgetItemId} onChange={e => setForm(p => ({ ...p, budgetItemId: e.target.value }))}>
-                <option value="">— Fără —</option>
-                {budgetItems.map(it => <option key={it.id} value={it.id}>{it.name}</option>)}
-              </select>
-            </div>
-            <div style={S.formGroup}><label style={S.label}>Note</label><textarea style={{ ...S.input, height: 60, resize: "vertical" }} value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} /></div>
-            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-              <button style={S.btn("outline")} onClick={() => setModal(null)}>Anulează</button>
-              <button style={S.btn("primary")} onClick={save}>Salvează</button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }
@@ -922,6 +943,15 @@ function VendorsModule() {
 // ─── AVAILABILITY MODULE ───────────────────────────────────────────────────────
 const RO_MONTHS = ["Ianuarie", "Februarie", "Martie", "Aprilie", "Mai", "Iunie", "Iulie", "August", "Septembrie", "Octombrie", "Noiembrie", "Decembrie"]
 const RO_WEEKDAYS = ["L", "Ma", "Mi", "J", "V", "S", "D"]
+const EVENT_COLORS = [
+  { key: "neutral", hex: C.textDim },
+  { key: "danger", hex: C.danger },
+  { key: "gold", hex: C.gold },
+  { key: "sage", hex: C.sage },
+  { key: "purple", hex: C.purple },
+  { key: "rose", hex: C.accent },
+]
+function eventColorHex(key) { return EVENT_COLORS.find(c => c.key === key)?.hex || C.textDim }
 
 function pad2(n) { return String(n).padStart(2, "0") }
 function isoDate(y, m, d) { return `${y}-${pad2(m + 1)}-${pad2(d)}` }
@@ -942,6 +972,7 @@ function AvailabilityModule() {
   const [view, setView] = useState({ y: today.getFullYear(), m: today.getMonth() })
   const [dayModal, setDayModal] = useState(null)
   const [newEventTitle, setNewEventTitle] = useState("")
+  const [newEventColor, setNewEventColor] = useState("neutral")
 
   useLockBodyScroll(Boolean(dayModal))
 
@@ -956,13 +987,15 @@ function AvailabilityModule() {
 
   const addEvent = () => {
     if (!newEventTitle.trim()) return
-    setEvents(prev => [...prev, { id: Date.now(), date: dayModal, title: newEventTitle.trim() }])
+    setEvents(prev => [...prev, { id: Date.now(), date: dayModal, title: newEventTitle.trim(), color: newEventColor }])
     setNewEventTitle("")
+    setNewEventColor("neutral")
   }
   const removeEvent = (id) => setEvents(prev => prev.filter(e => e.id !== id))
 
   const dayStatuses = (date) => availability.filter(a => a.date === date)
   const dayEvents = (date) => events.filter(e => e.date === date)
+  const dayEventColors = (date) => [...new Set(dayEvents(date).map(e => e.color || "neutral"))]
   const todayIso = isoDate(today.getFullYear(), today.getMonth(), today.getDate())
   const cells = monthGridDays(view.y, view.m)
   const prevMonth = () => setView(v => v.m === 0 ? { y: v.y - 1, m: 11 } : { y: v.y, m: v.m - 1 })
@@ -997,7 +1030,7 @@ function AvailabilityModule() {
               const statuses = dayStatuses(date)
               const hasOcupat = statuses.some(s => s.status === "ocupat")
               const hasLiber = statuses.some(s => s.status === "liber")
-              const hasEvents = dayEvents(date).length > 0
+              const eventColors = dayEventColors(date)
               const isToday = date === todayIso
               return (
                 <button
@@ -1010,11 +1043,11 @@ function AvailabilityModule() {
                   }}
                 >
                   <span style={{ fontSize: 12, fontWeight: isToday ? 800 : 500 }}>{d}</span>
-                  {(hasLiber || hasOcupat || hasEvents) && (
-                    <div style={{ display: "flex", gap: 2 }}>
+                  {(hasLiber || hasOcupat || eventColors.length > 0) && (
+                    <div style={{ display: "flex", gap: 2, flexWrap: "wrap", justifyContent: "center", maxWidth: "100%" }}>
                       {hasLiber && <div style={{ width: 5, height: 5, borderRadius: "50%", background: C.sage }} />}
                       {hasOcupat && <div style={{ width: 5, height: 5, borderRadius: "50%", background: C.danger }} />}
-                      {hasEvents && <div style={{ width: 5, height: 5, borderRadius: "50%", background: C.purple }} />}
+                      {eventColors.map(ck => <div key={ck} style={{ width: 5, height: 5, borderRadius: "50%", background: eventColorHex(ck) }} />)}
                     </div>
                   )}
                 </button>
@@ -1038,11 +1071,24 @@ function AvailabilityModule() {
               {dayEvents(dayModal).length === 0 && <div style={{ fontSize: 13, color: C.textDim, padding: "4px 0" }}>Niciun eveniment în ziua asta.</div>}
               {dayEvents(dayModal).map(ev => (
                 <div key={ev.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 10px", background: C.surfaceHi, borderRadius: 8, marginBottom: 5 }}>
-                  <span style={{ fontSize: 13 }}>{ev.title}</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                    <div style={{ width: 9, height: 9, borderRadius: "50%", background: eventColorHex(ev.color), flexShrink: 0 }} />
+                    <span style={{ fontSize: 13 }}>{ev.title}</span>
+                  </div>
                   <button style={{ ...S.btn("ghost"), padding: "2px 4px", color: C.danger }} onClick={() => removeEvent(ev.id)}><XIcon size={14} /></button>
                 </div>
               ))}
-              <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <div style={{ display: "flex", gap: 6, marginTop: 10, marginBottom: 8 }}>
+                {EVENT_COLORS.map(c => (
+                  <button
+                    key={c.key}
+                    onClick={() => setNewEventColor(c.key)}
+                    title={c.key}
+                    style={{ width: 22, height: 22, borderRadius: "50%", background: c.hex, border: newEventColor === c.key ? `2px solid ${C.textPri}` : "2px solid transparent", cursor: "pointer", padding: 0 }}
+                  />
+                ))}
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
                 <input style={{ ...S.input, flex: 1 }} placeholder="ex: Post, întâlnire cu..." value={newEventTitle} onChange={e => setNewEventTitle(e.target.value)} onKeyDown={e => { if (e.key === "Enter") addEvent() }} />
                 <button style={S.btn("purple")} onClick={addEvent}>Adaugă</button>
               </div>
@@ -1534,6 +1580,7 @@ const TABS = [
   { id: "todo",    label: "To-do",     Icon: CheckIcon    },
   { id: "vendors", label: "Furnizori", Icon: BriefcaseIcon },
   { id: "avail",   label: "Disponibilitate", Icon: CalendarIcon },
+  { id: "combo",   label: "Calculator", Icon: CalculatorIcon },
   { id: "seating", label: "Plan mese", Icon: TableIcon    },
   { id: "budget",  label: "Buget",     Icon: WalletIcon   },
 ]
@@ -1594,6 +1641,7 @@ export default function App() {
         {tab === "todo"    && <TodoModule />}
         {tab === "vendors" && <VendorsModule />}
         {tab === "avail"   && <AvailabilityModule />}
+        {tab === "combo"   && <ComboModule />}
         {tab === "seating" && <SeatingModule />}
         {tab === "budget"  && <BudgetModule />}
       </main>
