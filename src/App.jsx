@@ -853,7 +853,7 @@ function VendorsModule() {
               <label style={S.label}>Link atașament (PDF, poze etc.)</label>
               <input style={S.input} placeholder="link Google Drive, Dropbox, atașament email..." value={form.attachmentUrl} onChange={e => setForm(p => ({ ...p, attachmentUrl: e.target.value }))} />
             </div>
-            <div style={S.formGroup}><label style={S.label}>Note</label><textarea style={{ ...S.input, height: 140, resize: "vertical" }} value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} /></div>
+            <div style={S.formGroup}><label style={S.label}>Note</label><textarea style={{ ...S.input, height: 200, resize: "vertical" }} value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} /></div>
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
               <button style={S.btn("outline")} onClick={() => setModal(null)}>Anulează</button>
               <button style={S.btn("primary")} onClick={save}>Salvează</button>
