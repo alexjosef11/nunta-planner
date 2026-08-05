@@ -21,6 +21,13 @@ const SearchIcon   = () => <Icon d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0
 const SyncIcon     = () => <Icon d="M4 4v5h.582M20 20v-5h-.581M4.582 9a8 8 0 0 1 15.356 2M19.419 15A8 8 0 0 1 4.064 13" strokeWidth={1.8} />
 const UserPlusIcon = () => <Icon d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M8.5 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM20 8v6M23 11h-6" />
 const DownloadIcon = () => <Icon d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
+const CopyIcon     = () => <Icon d="M20 9H11a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2v-9a2 2 0 0 0-2-2zM5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+const BriefcaseIcon = ({ size = 18 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="2" y="7" width="20" height="14" rx="2" />
+    <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16M2 13h20" />
+  </svg>
+)
 
 // ─── EXCEL EXPORT ─────────────────────────────────────────────────────────────
 function exportToExcel(sheets, filename) {
@@ -131,6 +138,16 @@ function useIsMobile() {
   return mobile
 }
 
+// ─── BODY SCROLL LOCK (for modals) ────────────────────────────────────────────
+function useLockBodyScroll(active) {
+  useEffect(() => {
+    if (!active) return
+    const prev = document.body.style.overflow
+    document.body.style.overflow = "hidden"
+    return () => { document.body.style.overflow = prev }
+  }, [active])
+}
+
 // ─── SUPABASE SHARED STATE ────────────────────────────────────────────────────
 function useSharedState(key, def) {
   const [val, setVal] = useState(def)
@@ -166,22 +183,36 @@ function useSharedState(key, def) {
 }
 
 // ─── GUESTS MODULE ────────────────────────────────────────────────────────────
+const GUESTS_PAGE_SIZE = 15
+
 function GuestsModule() {
   const [guests, setGuests, synced] = useSharedState("wedding_guests", [])
   const [groups, setGroups] = useSharedState("wedding_groups", [])
+  const [, setTables] = useSharedState("wedding_tables", [])
   const [search, setSearch] = useState("")
   const [filter, setFilter] = useState("all")
+  const [page, setPage] = useState(1)
   const [modal, setModal] = useState(null)
-  const [groupModal, setGroupModal] = useState(false)
+  const [groupModal, setGroupModal] = useState(null)
   const [groupForm, setGroupForm] = useState({ name: "" })
+  const [groupViewId, setGroupViewId] = useState(null)
+  const [genMsg, setGenMsg] = useState("")
 
   const emptyGuest = { name: "", side: "Mireasă", rsvp: "în așteptare", dietary: "", phone: "", groupId: "", companions: [] }
   const [form, setForm] = useState(emptyGuest)
   const [compForm, setCompForm] = useState({ name: "", type: "adult" })
   const [showCompForm, setShowCompForm] = useState(false)
 
+  useLockBodyScroll(Boolean(modal) || Boolean(groupModal) || Boolean(groupViewId))
+  useEffect(() => { setPage(1) }, [search, filter])
+
   const openAdd = () => { setForm(emptyGuest); setShowCompForm(false); setModal("add") }
   const openEdit = (g) => { setForm({ ...emptyGuest, ...g, companions: g.companions || [] }); setShowCompForm(false); setModal(g) }
+  const openDuplicate = (g) => {
+    setForm({ ...emptyGuest, ...g, name: "", companions: (g.companions || []).map(c => ({ ...c, id: Date.now() + Math.random() })) })
+    setShowCompForm(false)
+    setModal("add")
+  }
 
   const addCompanion = () => {
     if (!compForm.name.trim()) return
@@ -199,14 +230,31 @@ function GuestsModule() {
   }
   const remove = (id) => { if (window.confirm("Ștergi invitatul?")) setGuests(prev => prev.filter(g => g.id !== id)) }
 
+  const openAddGroup = () => { setGroupForm({ name: "" }); setGroupModal("add") }
+  const openEditGroup = (g) => { setGroupForm({ name: g.name }); setGroupModal(g) }
+  const openGroupView = (id) => { setGroupViewId(id); setGenMsg("") }
+  const closeGroupView = () => { setGroupViewId(null); setGenMsg("") }
   const saveGroup = () => {
     if (!groupForm.name.trim()) return
-    setGroups(prev => [...prev, { id: Date.now(), name: groupForm.name }])
-    setGroupForm({ name: "" }); setGroupModal(false)
+    if (groupModal === "add") setGroups(prev => [...prev, { id: Date.now(), name: groupForm.name }])
+    else setGroups(prev => prev.map(g => g.id === groupModal.id ? { ...g, name: groupForm.name } : g))
+    setGroupForm({ name: "" }); setGroupModal(null)
   }
   const removeGroup = (id) => {
     setGroups(prev => prev.filter(g => g.id !== id))
     setGuests(prev => prev.map(g => g.groupId === id ? { ...g, groupId: "" } : g))
+    if (groupViewId === id) closeGroupView()
+  }
+
+  const groupMembers = (id) => guests.filter(g => String(g.groupId) === String(id))
+  const groupPeopleCount = (id) => groupMembers(id).reduce((a, g) => a + 1 + (g.companions?.length || 0), 0)
+
+  const generateTableFromGroup = (group) => {
+    const members = groupMembers(group.id)
+    const seats = members.flatMap(g => [g.id, ...(g.companions || []).map(c => `${g.id}_${c.id}`)])
+    if (seats.length === 0) return
+    setTables(prev => [...prev, { id: Date.now(), name: group.name, capacity: seats.length, seats }])
+    setGenMsg(`Masă „${group.name}” creată cu ${seats.length} locuri — o găsești în Plan mese.`)
   }
 
   const exportGuests = () => {
@@ -225,8 +273,12 @@ function GuestsModule() {
     const mf = filter === "all" || g.rsvp === filter || g.side === filter || String(g.groupId) === String(filter)
     return ms && mf
   })
+  const pageCount = Math.max(1, Math.ceil(filtered.length / GUESTS_PAGE_SIZE))
+  const pageSafe = Math.min(page, pageCount)
+  const paged = filtered.slice((pageSafe - 1) * GUESTS_PAGE_SIZE, pageSafe * GUESTS_PAGE_SIZE)
   const rsvpColor = (r) => r === "confirmat" ? "sage" : r === "refuzat" ? "danger" : "neutral"
   const groupName = (id) => groups.find(g => String(g.id) === String(id))?.name
+  const viewedGroup = groupViewId ? groups.find(g => g.id === groupViewId) : null
 
   return (
     <div className="fadeup">
@@ -240,14 +292,17 @@ function GuestsModule() {
       <div style={S.card}>
         <div style={S.cardHeader}>
           <span style={S.cardTitle}>Grupuri</span>
-          <button style={S.btn("purple")} onClick={() => { setGroupForm({ name: "" }); setGroupModal(true) }}><PlusIcon /> Grup nou</button>
+          <button style={S.btn("purple")} onClick={openAddGroup}><PlusIcon /> Grup nou</button>
         </div>
         <div style={{ padding: "12px 20px", display: "flex", flexWrap: "wrap", gap: 8 }}>
           {groups.length === 0 && <span style={{ fontSize: 13, color: C.textDim }}>Niciun grup.</span>}
           {groups.map(g => (
-            <div key={g.id} style={{ display: "inline-flex", alignItems: "center", gap: 6, background: C.purpleDim, borderRadius: 20, padding: "4px 12px" }}>
-              <span style={{ fontSize: 12, color: C.purple, fontWeight: 700 }}>{g.name}</span>
-              <span style={{ fontSize: 11, color: C.textDim }}>({guests.filter(gu => String(gu.groupId) === String(g.id)).length})</span>
+            <div key={g.id} style={{ display: "inline-flex", alignItems: "center", gap: 4, background: C.purpleDim, borderRadius: 20, padding: "4px 6px 4px 12px" }}>
+              <button style={{ background: "none", border: "none", cursor: "pointer", padding: 0, display: "flex", alignItems: "center", gap: 6 }} onClick={() => openGroupView(g.id)}>
+                <span style={{ fontSize: 12, color: C.purple, fontWeight: 700 }}>{g.name}</span>
+                <span style={{ fontSize: 11, color: C.textDim }}>({guests.filter(gu => String(gu.groupId) === String(g.id)).length})</span>
+              </button>
+              <button style={{ background: "none", border: "none", cursor: "pointer", color: C.textDim, padding: "0 2px", lineHeight: 1, display: "flex" }} onClick={() => openEditGroup(g)}><EditIcon size={12} /></button>
               <button style={{ background: "none", border: "none", cursor: "pointer", color: C.textDim, padding: "0 2px", lineHeight: 1, display: "flex" }} onClick={() => removeGroup(g.id)}><XIcon size={12} /></button>
             </div>
           ))}
@@ -281,12 +336,19 @@ function GuestsModule() {
         <div style={{ padding: "10px 20px" }}>
           {!synced && <div style={S.emptyState}><div className="spin" style={{ width: 24, height: 24, border: `2px solid ${C.border}`, borderTopColor: C.accent, borderRadius: "50%", margin: "0 auto 12px" }} /></div>}
           {synced && filtered.length === 0 && <div style={S.emptyState}><div style={{ fontSize: 28, marginBottom: 8, opacity: 0.3 }}>💌</div><div style={{ fontSize: 13 }}>{guests.length === 0 ? "Adaugă primul invitat." : "Niciun rezultat."}</div></div>}
-          {synced && filtered.map((g, i) => (
-            <div key={g.id} style={{ ...S.row2(i), flexWrap: "wrap" }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 600, fontSize: 14 }}>{g.name}</div>
-                {(g.companions || []).length > 0 && <div style={{ fontSize: 11, color: C.textDim, marginTop: 2 }}>+ {g.companions.map(c => `${c.name} (${c.type})`).join(", ")}</div>}
-                {g.dietary && <div style={{ fontSize: 11, color: C.textDim }}>{g.dietary}</div>}
+          {synced && paged.map((g, i) => (
+            <div key={g.id} style={{ ...S.row2(i), flexDirection: "column", alignItems: "stretch", gap: 6 }}>
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, fontSize: 14 }}>{g.name}</div>
+                  {(g.companions || []).length > 0 && <div style={{ fontSize: 11, color: C.textDim, marginTop: 2 }}>+ {g.companions.map(c => `${c.name} (${c.type})`).join(", ")}</div>}
+                  {g.dietary && <div style={{ fontSize: 11, color: C.textDim }}>{g.dietary}</div>}
+                </div>
+                <div style={{ display: "flex", gap: 2, flexShrink: 0 }}>
+                  <button style={{ ...S.btn("ghost"), padding: "4px 6px" }} title="Duplică" onClick={() => openDuplicate(g)}><CopyIcon /></button>
+                  <button style={{ ...S.btn("ghost"), padding: "4px 6px" }} onClick={() => openEdit(g)}><EditIcon /></button>
+                  <button style={{ ...S.btn("ghost"), padding: "4px 6px", color: C.danger }} onClick={() => remove(g.id)}><TrashIcon /></button>
+                </div>
               </div>
               <div style={{ display: "flex", gap: 5, flexWrap: "wrap", alignItems: "center" }}>
                 {groupName(g.groupId) && <span style={S.badge("purple")}>{groupName(g.groupId)}</span>}
@@ -294,10 +356,15 @@ function GuestsModule() {
                 <span style={S.badge(rsvpColor(g.rsvp))}>{g.rsvp}</span>
                 {(g.companions || []).length > 0 && <span style={S.badge("neutral")}>{1 + g.companions.length} pers.</span>}
               </div>
-              <button style={{ ...S.btn("ghost"), padding: "4px 8px" }} onClick={() => openEdit(g)}><EditIcon /></button>
-              <button style={{ ...S.btn("ghost"), padding: "4px 8px", color: C.danger }} onClick={() => remove(g.id)}><TrashIcon /></button>
             </div>
           ))}
+          {synced && filtered.length > 0 && (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, marginTop: 14, paddingTop: 12, borderTop: `1px solid ${C.border}` }}>
+              <button style={S.btn("outline")} disabled={pageSafe <= 1} onClick={() => setPage(p => Math.max(1, p - 1))}>‹ Anterior</button>
+              <span style={{ fontSize: 12, color: C.textDim }}>Pagina {pageSafe} / {pageCount}</span>
+              <button style={S.btn("outline")} disabled={pageSafe >= pageCount} onClick={() => setPage(p => Math.min(pageCount, p + 1))}>Următor ›</button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -348,16 +415,47 @@ function GuestsModule() {
         </div>
       )}
 
-      {/* Group Modal */}
+      {/* Group Modal (add / edit) */}
       {groupModal && (
-        <div style={S.modal} onClick={e => { if (e.target === e.currentTarget) setGroupModal(false) }}>
+        <div style={S.modal} onClick={e => { if (e.target === e.currentTarget) setGroupModal(null) }}>
           <div style={S.modalBox}>
             <div style={S.modalHandle} />
-            <div style={S.modalTitle}>Grup nou</div>
+            <div style={S.modalTitle}>{groupModal === "add" ? "Grup nou" : "Editează grup"}</div>
             <div style={S.formGroup}><label style={S.label}>Numele grupului</label><input style={S.input} placeholder="ex: Prieteni facultate" value={groupForm.name} onChange={e => setGroupForm({ name: e.target.value })} /></div>
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-              <button style={S.btn("outline")} onClick={() => setGroupModal(false)}>Anulează</button>
-              <button style={S.btn("purple")} onClick={saveGroup}>Creează</button>
+              <button style={S.btn("outline")} onClick={() => setGroupModal(null)}>Anulează</button>
+              <button style={S.btn("purple")} onClick={saveGroup}>{groupModal === "add" ? "Creează" : "Salvează"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Group members view */}
+      {viewedGroup && (
+        <div style={S.modal} onClick={e => { if (e.target === e.currentTarget) closeGroupView() }}>
+          <div style={S.modalBox}>
+            <div style={S.modalHandle} />
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+              <div style={S.modalTitle}>{viewedGroup.name}</div>
+              <button style={{ ...S.btn("ghost"), padding: 4 }} onClick={closeGroupView}><XIcon /></button>
+            </div>
+            <div style={{ fontSize: 12, color: C.textDim, marginBottom: 14 }}>{groupPeopleCount(viewedGroup.id)} persoane în total</div>
+            <div style={{ maxHeight: 320, overflowY: "auto", marginBottom: 16 }}>
+              {groupMembers(viewedGroup.id).length === 0 && <div style={{ fontSize: 13, color: C.textDim }}>Niciun invitat în acest grup încă.</div>}
+              {groupMembers(viewedGroup.id).map(g => (
+                <div key={g.id} style={{ padding: "8px 4px", borderBottom: `1px solid ${C.border}` }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                    <span style={{ fontSize: 13, fontWeight: 600 }}>{g.name}</span>
+                    <span style={S.badge(rsvpColor(g.rsvp))}>{g.rsvp}</span>
+                  </div>
+                  {(g.companions || []).length > 0 && <div style={{ fontSize: 11, color: C.textDim, marginTop: 2 }}>+ {g.companions.map(c => c.name).join(", ")}</div>}
+                </div>
+              ))}
+            </div>
+            {genMsg && <div style={{ fontSize: 12, color: C.sage, marginBottom: 12 }}>{genMsg}</div>}
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button style={S.btn("outline")} onClick={closeGroupView}>Închide</button>
+              <button style={S.btn("sage")} disabled={groupMembers(viewedGroup.id).length === 0} onClick={() => generateTableFromGroup(viewedGroup)}><TableIcon /> Generează masă</button>
             </div>
           </div>
         </div>
@@ -375,6 +473,8 @@ function TodoModule() {
   const [modal, setModal] = useState(null)
   const [filterCat, setFilterCat] = useState("all")
   const [form, setForm] = useState({ title: "", category: "Venue", timeframe: "6-9 luni", priority: "normal", notes: "" })
+
+  useLockBodyScroll(Boolean(modal))
 
   const openAdd = () => { setForm({ title: "", category: "Venue", timeframe: "6-9 luni", priority: "normal", notes: "" }); setModal("add") }
   const openEdit = (t) => { setForm({ ...t }); setModal(t) }
@@ -475,6 +575,133 @@ function TodoModule() {
   )
 }
 
+// ─── VENDORS MODULE ───────────────────────────────────────────────────────────
+const VENDOR_CATS = ["Sală / Restaurant", "Catering", "Foto & Video", "Muzică", "Flori & Decor", "Oficiant / Formalități", "Transport", "Frumusețe", "Altele"]
+const VENDOR_STATUS = ["de contactat", "contactat", "ofertă primită", "rezervat", "confirmat"]
+
+function VendorsModule() {
+  const [vendors, setVendors, synced] = useSharedState("wedding_vendors", [])
+  const [budgetItems] = useSharedState("wedding_budget", [])
+  const [modal, setModal] = useState(null)
+  const emptyVendor = { name: "", category: "Sală / Restaurant", contactPerson: "", phone: "", email: "", status: "de contactat", notes: "", budgetItemId: "" }
+  const [form, setForm] = useState(emptyVendor)
+
+  useLockBodyScroll(Boolean(modal))
+
+  const openAdd = () => { setForm(emptyVendor); setModal("add") }
+  const openEdit = (v) => { setForm({ ...emptyVendor, ...v }); setModal(v) }
+  const save = () => {
+    if (!form.name.trim()) return
+    if (modal === "add") setVendors(prev => [...prev, { ...form, id: Date.now() }])
+    else setVendors(prev => prev.map(v => v.id === modal.id ? { ...modal, ...form } : v))
+    setModal(null)
+  }
+  const remove = (id) => { if (window.confirm("Ștergi furnizorul?")) setVendors(prev => prev.filter(v => v.id !== id)) }
+
+  const budgetItemLabel = (id) => {
+    const it = budgetItems.find(b => String(b.id) === String(id))
+    if (!it) return null
+    const fmt = new Intl.NumberFormat("ro-RO").format(Math.round(parseFloat(it.estimated) || 0))
+    return `${it.name} — ${fmt} RON`
+  }
+
+  const exportVendors = () => {
+    const rows = vendors.map(v => ({ "Nume": v.name, "Categorie": v.category, "Persoană contact": v.contactPerson || "", "Telefon": v.phone || "", "Email": v.email || "", "Status": v.status, "Cheltuială asociată": budgetItemLabel(v.budgetItemId) || "", "Note": v.notes || "" }))
+    exportToExcel([{ name: "Furnizori", data: rows.length ? rows : [{ Info: "Niciun furnizor" }] }], "furnizori-nunta.xlsx")
+  }
+
+  const statusColor = (s) => s === "confirmat" ? "sage" : s === "rezervat" ? "purple" : s === "ofertă primită" ? "gold" : s === "contactat" ? "rose" : "neutral"
+  const grouped = VENDOR_CATS.reduce((acc, cat) => { const its = vendors.filter(v => v.category === cat); if (its.length) acc[cat] = its; return acc }, {})
+
+  return (
+    <div className="fadeup">
+      <div style={S.statsRow}>
+        {[{ num: vendors.length, label: "Furnizori" }, { num: vendors.filter(v => v.status === "confirmat").length, label: "Confirmați" }, { num: vendors.filter(v => v.status === "rezervat").length, label: "Rezervați" }, { num: vendors.filter(v => v.status === "de contactat").length, label: "De contactat" }].map(s => (
+          <div key={s.label} style={S.statCard}><div style={S.statNum}>{s.num}</div><div style={S.statLabel}>{s.label}</div></div>
+        ))}
+      </div>
+
+      <div style={S.card}>
+        <div style={S.cardHeader}>
+          <span style={S.cardTitle}>Furnizori</span>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button style={S.btn("gold")} onClick={exportVendors}><DownloadIcon /></button>
+            <button style={S.btn("primary")} onClick={openAdd}><PlusIcon /> Adaugă</button>
+          </div>
+        </div>
+        <div style={{ padding: "10px 20px" }}>
+          {!synced && <div style={S.emptyState}><div className="spin" style={{ width: 24, height: 24, border: `2px solid ${C.border}`, borderTopColor: C.accent, borderRadius: "50%", margin: "0 auto" }} /></div>}
+          {synced && vendors.length === 0 && <div style={S.emptyState}><div style={{ fontSize: 28, marginBottom: 8, opacity: 0.3 }}>🤝</div><div style={{ fontSize: 13 }}>Adaugă primul furnizor.</div></div>}
+          {Object.entries(grouped).map(([cat, its]) => (
+            <div key={cat} style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em", color: C.gold, marginBottom: 6, paddingLeft: 2, fontWeight: 700 }}>◆ {cat}</div>
+              {its.map((v, i) => (
+                <div key={v.id} style={{ ...S.row2(i), flexDirection: "column", alignItems: "stretch", gap: 6 }}>
+                  <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 600, fontSize: 14 }}>{v.name}</div>
+                      {(v.contactPerson || v.phone) && (
+                        <div style={{ fontSize: 11, color: C.textDim, marginTop: 2 }}>
+                          {v.contactPerson}{v.contactPerson && v.phone ? " · " : ""}
+                          {v.phone && <a href={`tel:${v.phone}`} style={{ color: C.textSec }}>{v.phone}</a>}
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ display: "flex", gap: 2, flexShrink: 0 }}>
+                      <button style={{ ...S.btn("ghost"), padding: "4px 6px" }} onClick={() => openEdit(v)}><EditIcon /></button>
+                      <button style={{ ...S.btn("ghost"), padding: "4px 6px", color: C.danger }} onClick={() => remove(v.id)}><TrashIcon /></button>
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 5, flexWrap: "wrap", alignItems: "center" }}>
+                    <span style={S.badge(statusColor(v.status))}>{v.status}</span>
+                    {budgetItemLabel(v.budgetItemId) && <span style={S.badge("gold")}>💰 {budgetItemLabel(v.budgetItemId)}</span>}
+                    {v.email && <span style={{ fontSize: 11, color: C.textDim }}>{v.email}</span>}
+                  </div>
+                  {v.notes && <div style={{ fontSize: 11, color: C.textDim }}>{v.notes}</div>}
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {modal && (
+        <div style={S.modal} onClick={e => { if (e.target === e.currentTarget) setModal(null) }}>
+          <div style={S.modalBox}>
+            <div style={S.modalHandle} />
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <div style={S.modalTitle}>{modal === "add" ? "Furnizor nou" : "Editează furnizor"}</div>
+              <button style={{ ...S.btn("ghost"), padding: 4 }} onClick={() => setModal(null)}><XIcon /></button>
+            </div>
+            <div style={S.formGroup}><label style={S.label}>Nume firmă *</label><input style={S.input} placeholder="ex: Sala Regal" value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} /></div>
+            <div style={S.formGroup}><label style={S.label}>Categorie</label><select style={S.select} value={form.category} onChange={e => setForm(p => ({ ...p, category: e.target.value }))}>{VENDOR_CATS.map(c => <option key={c}>{c}</option>)}</select></div>
+            <div style={{ ...S.row, marginBottom: 14 }}>
+              <div style={S.col(1)}><label style={S.label}>Persoană de contact</label><input style={S.input} placeholder="ex: Ana Popescu" value={form.contactPerson} onChange={e => setForm(p => ({ ...p, contactPerson: e.target.value }))} /></div>
+              <div style={S.col(1)}><label style={S.label}>Telefon</label><input style={S.input} placeholder="07xx..." value={form.phone} onChange={e => setForm(p => ({ ...p, phone: e.target.value }))} /></div>
+            </div>
+            <div style={{ ...S.row, marginBottom: 14 }}>
+              <div style={S.col(1)}><label style={S.label}>Email</label><input style={S.input} placeholder="contact@..." value={form.email} onChange={e => setForm(p => ({ ...p, email: e.target.value }))} /></div>
+              <div style={S.col(1)}><label style={S.label}>Status</label><select style={S.select} value={form.status} onChange={e => setForm(p => ({ ...p, status: e.target.value }))}>{VENDOR_STATUS.map(s => <option key={s}>{s}</option>)}</select></div>
+            </div>
+            <div style={S.formGroup}>
+              <label style={S.label}>Cheltuială asociată (din Buget)</label>
+              <select style={S.select} value={form.budgetItemId} onChange={e => setForm(p => ({ ...p, budgetItemId: e.target.value }))}>
+                <option value="">— Fără —</option>
+                {budgetItems.map(it => <option key={it.id} value={it.id}>{it.name}</option>)}
+              </select>
+            </div>
+            <div style={S.formGroup}><label style={S.label}>Note</label><textarea style={{ ...S.input, height: 60, resize: "vertical" }} value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} /></div>
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button style={S.btn("outline")} onClick={() => setModal(null)}>Anulează</button>
+              <button style={S.btn("primary")} onClick={save}>Salvează</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── SEATING MODULE ───────────────────────────────────────────────────────────
 function SeatingModule() {
   const [guests] = useSharedState("wedding_guests", [])
@@ -482,6 +709,8 @@ function SeatingModule() {
   const [modal, setModal] = useState(null)
   const [form, setForm] = useState({ name: "", capacity: 8 })
   const [assignModal, setAssignModal] = useState(null)
+
+  useLockBodyScroll(Boolean(modal) || Boolean(assignModal))
 
   const addTable = () => { if (!form.name.trim()) return; setTables(prev => [...prev, { ...form, id: Date.now(), seats: [] }]); setModal(null) }
   const removeTable = (id) => { if (window.confirm("Ștergi masa?")) setTables(prev => prev.filter(t => t.id !== id)) }
@@ -604,6 +833,8 @@ function BudgetModule() {
   const [editTotal, setEditTotal] = useState(false)
   const [totalInput, setTotalInput] = useState("")
   const [form, setForm] = useState({ name: "", category: "Venue / Restaurant", estimated: 0, paid: 0, vendor: "", paymentStatus: "neplătit", notes: "" })
+
+  useLockBodyScroll(Boolean(modal))
 
   const openAdd = () => { setForm({ name: "", category: "Venue / Restaurant", estimated: 0, paid: 0, vendor: "", paymentStatus: "neplătit", notes: "" }); setModal("add") }
   const openEdit = (it) => { setForm({ ...it }); setModal(it) }
@@ -742,10 +973,11 @@ function BudgetModule() {
 
 // ─── APP ROOT ─────────────────────────────────────────────────────────────────
 const TABS = [
-  { id: "guests",  label: "Invitați",  Icon: UsersIcon  },
-  { id: "todo",    label: "To-do",     Icon: CheckIcon  },
-  { id: "seating", label: "Plan mese", Icon: TableIcon  },
-  { id: "budget",  label: "Buget",     Icon: WalletIcon },
+  { id: "guests",  label: "Invitați",  Icon: UsersIcon    },
+  { id: "todo",    label: "To-do",     Icon: CheckIcon    },
+  { id: "vendors", label: "Furnizori", Icon: BriefcaseIcon },
+  { id: "seating", label: "Plan mese", Icon: TableIcon    },
+  { id: "budget",  label: "Buget",     Icon: WalletIcon   },
 ]
 
 export default function App() {
@@ -802,6 +1034,7 @@ export default function App() {
       <main style={S.main(isMobile)} key={tab} className="fadeup">
         {tab === "guests"  && <GuestsModule />}
         {tab === "todo"    && <TodoModule />}
+        {tab === "vendors" && <VendorsModule />}
         {tab === "seating" && <SeatingModule />}
         {tab === "budget"  && <BudgetModule />}
       </main>
