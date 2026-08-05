@@ -656,13 +656,17 @@ function fmtDateRo(dateStr) {
   const [y, m, d] = dateStr.split("-").map(Number)
   return `${d}.${m}.${y}`
 }
+function fmtRON(n) {
+  return new Intl.NumberFormat("ro-RO").format(Math.round(parseFloat(n) || 0)) + " RON"
+}
 
 function VendorsModule() {
   const [vendors, setVendors, synced] = useSharedState("wedding_vendors", [])
   const [budgetItems] = useSharedState("wedding_budget", [])
   const [availability, setAvailability] = useSharedState("wedding_availability", [])
+  const [combos, setCombos] = useSharedState("wedding_combos", [])
   const [modal, setModal] = useState(null)
-  const emptyVendor = { name: "", category: "Sală / Restaurant", contactPerson: "", phone: "", email: "", status: "de contactat", notes: "", budgetItemId: "" }
+  const emptyVendor = { name: "", category: "Sală / Restaurant", contactPerson: "", phone: "", email: "", status: "de contactat", notes: "", budgetItemId: "", offerAmount: "" }
   const [form, setForm] = useState(emptyVendor)
 
   useLockBodyScroll(Boolean(modal))
@@ -687,6 +691,17 @@ function VendorsModule() {
   }
   const availDates = [...new Set(availability.map(a => a.date))].sort()
 
+  const activeCats = VENDOR_CATS.filter(cat => vendors.some(v => v.category === cat))
+  const vendorsInCat = (cat) => vendors.filter(v => v.category === cat)
+  const addCombo = () => setCombos(prev => [...prev, { id: Date.now(), name: `Varianta ${prev.length + 1}`, picks: {} }])
+  const removeCombo = (id) => setCombos(prev => prev.filter(c => c.id !== id))
+  const renameCombo = (id, name) => setCombos(prev => prev.map(c => c.id === id ? { ...c, name } : c))
+  const setPick = (id, cat, vendorId) => setCombos(prev => prev.map(c => c.id === id ? { ...c, picks: { ...c.picks, [cat]: vendorId } } : c))
+  const comboTotal = (combo) => Object.values(combo.picks).reduce((sum, vendorId) => {
+    const v = vendors.find(vv => String(vv.id) === String(vendorId))
+    return sum + (v ? parseFloat(v.offerAmount) || 0 : 0)
+  }, 0)
+
   const budgetItemLabel = (id) => {
     const it = budgetItems.find(b => String(b.id) === String(id))
     if (!it) return null
@@ -695,7 +710,7 @@ function VendorsModule() {
   }
 
   const exportVendors = () => {
-    const rows = vendors.map(v => ({ "Nume": v.name, "Categorie": v.category, "Persoană contact": v.contactPerson || "", "Telefon": v.phone || "", "Email": v.email || "", "Status": v.status, "Cheltuială asociată": budgetItemLabel(v.budgetItemId) || "", "Note": v.notes || "" }))
+    const rows = vendors.map(v => ({ "Nume": v.name, "Categorie": v.category, "Persoană contact": v.contactPerson || "", "Telefon": v.phone || "", "Email": v.email || "", "Status": v.status, "Ofertă (RON)": parseFloat(v.offerAmount) || 0, "Cheltuială asociată": budgetItemLabel(v.budgetItemId) || "", "Note": v.notes || "" }))
     exportToExcel([{ name: "Furnizori", data: rows.length ? rows : [{ Info: "Niciun furnizor" }] }], "furnizori-nunta.xlsx")
   }
 
@@ -743,6 +758,7 @@ function VendorsModule() {
                   </div>
                   <div style={{ display: "flex", gap: 5, flexWrap: "wrap", alignItems: "center" }}>
                     <span style={S.badge(statusColor(v.status))}>{v.status}</span>
+                    {v.offerAmount && <span style={S.badge("sage")}>💶 Ofertă: {fmtRON(v.offerAmount)}</span>}
                     {budgetItemLabel(v.budgetItemId) && <span style={S.badge("gold")}>💰 {budgetItemLabel(v.budgetItemId)}</span>}
                     {v.email && <span style={{ fontSize: 11, color: C.textDim }}>{v.email}</span>}
                   </div>
@@ -792,6 +808,50 @@ function VendorsModule() {
         </div>
       </div>
 
+      <div style={S.card}>
+        <div style={S.cardHeader}>
+          <span style={S.cardTitle}>Calculator combinații</span>
+          <button style={S.btn("purple")} onClick={addCombo}><PlusIcon /> Combinație nouă</button>
+        </div>
+        <div style={{ padding: "10px 20px", overflowX: "auto" }}>
+          {activeCats.length === 0 && <div style={{ fontSize: 13, color: C.textDim }}>Adaugă furnizori mai întâi.</div>}
+          {activeCats.length > 0 && combos.length === 0 && <div style={{ fontSize: 13, color: C.textDim }}>Adaugă o combinație ca să compari costuri totale (ex: sala X + muzică Y).</div>}
+          {activeCats.length > 0 && combos.length > 0 && (
+            <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 220 + activeCats.length * 180 }}>
+              <thead>
+                <tr>
+                  <th style={{ textAlign: "left", padding: "6px 10px 6px 4px", fontSize: 11, color: C.textDim, borderBottom: `1px solid ${C.border}` }}>Combinație</th>
+                  {activeCats.map(cat => <th key={cat} style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: C.textDim, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>{cat}</th>)}
+                  <th style={{ textAlign: "right", padding: "6px 8px", fontSize: 11, color: C.textDim, borderBottom: `1px solid ${C.border}` }}>Total</th>
+                  <th style={{ borderBottom: `1px solid ${C.border}` }} />
+                </tr>
+              </thead>
+              <tbody>
+                {combos.map(combo => (
+                  <tr key={combo.id}>
+                    <td style={{ padding: "6px 10px 6px 4px", borderBottom: `1px solid ${C.border}` }}>
+                      <input style={{ ...S.input, padding: "6px 8px", fontSize: 13, minWidth: 110 }} value={combo.name} onChange={e => renameCombo(combo.id, e.target.value)} />
+                    </td>
+                    {activeCats.map(cat => (
+                      <td key={cat} style={{ padding: "6px 8px", borderBottom: `1px solid ${C.border}` }}>
+                        <select style={{ ...S.select, fontSize: 12, padding: "6px 8px", minWidth: 150 }} value={combo.picks[cat] || ""} onChange={e => setPick(combo.id, cat, e.target.value)}>
+                          <option value="">—</option>
+                          {vendorsInCat(cat).map(v => <option key={v.id} value={v.id}>{v.name}{v.offerAmount ? ` (${fmtRON(v.offerAmount)})` : ""}</option>)}
+                        </select>
+                      </td>
+                    ))}
+                    <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 800, fontSize: 14, color: C.accent, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>{fmtRON(comboTotal(combo))}</td>
+                    <td style={{ borderBottom: `1px solid ${C.border}` }}>
+                      <button style={{ ...S.btn("ghost"), padding: "4px 6px", color: C.danger }} onClick={() => removeCombo(combo.id)}><TrashIcon size={14} /></button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+
       {modal && (
         <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) setModal(null) }}>
           <div className="modal-box">
@@ -809,6 +869,10 @@ function VendorsModule() {
             <div style={{ ...S.row, marginBottom: 14 }}>
               <div style={S.col(1)}><label style={S.label}>Email</label><input style={S.input} placeholder="contact@..." value={form.email} onChange={e => setForm(p => ({ ...p, email: e.target.value }))} /></div>
               <div style={S.col(1)}><label style={S.label}>Status</label><select style={S.select} value={form.status} onChange={e => setForm(p => ({ ...p, status: e.target.value }))}>{VENDOR_STATUS.map(s => <option key={s}>{s}</option>)}</select></div>
+            </div>
+            <div style={S.formGroup}>
+              <label style={S.label}>Ofertă primită (RON)</label>
+              <input style={S.input} type="number" min={0} placeholder="ex: 15000" value={form.offerAmount} onChange={e => setForm(p => ({ ...p, offerAmount: e.target.value }))} />
             </div>
             <div style={S.formGroup}>
               <label style={S.label}>Cheltuială asociată (din Buget)</label>
@@ -846,10 +910,12 @@ function monthGridDays(year, month) {
 
 function AvailabilityModule() {
   const [availability, setAvailability] = useSharedState("wedding_availability", [])
+  const [events, setEvents] = useSharedState("wedding_calendar_events", [])
   const [vendors] = useSharedState("wedding_vendors", [])
   const today = new Date()
   const [view, setView] = useState({ y: today.getFullYear(), m: today.getMonth() })
   const [dayModal, setDayModal] = useState(null)
+  const [newEventTitle, setNewEventTitle] = useState("")
 
   useLockBodyScroll(Boolean(dayModal))
 
@@ -862,25 +928,39 @@ function AvailabilityModule() {
     })
   }
 
+  const addEvent = () => {
+    if (!newEventTitle.trim()) return
+    setEvents(prev => [...prev, { id: Date.now(), date: dayModal, title: newEventTitle.trim() }])
+    setNewEventTitle("")
+  }
+  const removeEvent = (id) => setEvents(prev => prev.filter(e => e.id !== id))
+
   const dayStatuses = (date) => availability.filter(a => a.date === date)
+  const dayEvents = (date) => events.filter(e => e.date === date)
   const todayIso = isoDate(today.getFullYear(), today.getMonth(), today.getDate())
   const cells = monthGridDays(view.y, view.m)
   const prevMonth = () => setView(v => v.m === 0 ? { y: v.y - 1, m: 11 } : { y: v.y, m: v.m - 1 })
   const nextMonth = () => setView(v => v.m === 11 ? { y: v.y + 1, m: 0 } : { y: v.y, m: v.m + 1 })
+  const yearOptions = Array.from({ length: 8 }, (_, i) => today.getFullYear() - 1 + i)
 
   return (
     <div className="fadeup">
       <div style={S.card}>
-        <div style={S.cardHeader}>
-          <span style={S.cardTitle}>Disponibilitate furnizori</span>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ ...S.cardHeader, flexWrap: "wrap" }}>
+          <span style={S.cardTitle}>Calendar</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
             <button style={{ ...S.btn("ghost"), padding: "4px 8px" }} onClick={prevMonth}>‹</button>
-            <span style={{ fontSize: 13, fontWeight: 700, minWidth: 130, textAlign: "center" }}>{RO_MONTHS[view.m]} {view.y}</span>
+            <select style={{ ...S.select, width: "auto", fontSize: 12, padding: "7px 10px" }} value={view.m} onChange={e => setView(v => ({ ...v, m: parseInt(e.target.value) }))}>
+              {RO_MONTHS.map((mo, i) => <option key={mo} value={i}>{mo}</option>)}
+            </select>
+            <select style={{ ...S.select, width: "auto", fontSize: 12, padding: "7px 10px" }} value={view.y} onChange={e => setView(v => ({ ...v, y: parseInt(e.target.value) }))}>
+              {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
+            </select>
             <button style={{ ...S.btn("ghost"), padding: "4px 8px" }} onClick={nextMonth}>›</button>
           </div>
         </div>
         <div style={{ padding: "14px 20px" }}>
-          {vendors.length === 0 && <div style={{ fontSize: 13, color: C.textDim, marginBottom: 12 }}>Adaugă furnizori în tab-ul Furnizori ca să poți bifa disponibilitate.</div>}
+          {vendors.length === 0 && <div style={{ fontSize: 13, color: C.textDim, marginBottom: 12 }}>Poți nota evenimente pe orice zi. Adaugă și furnizori în tab-ul Furnizori ca să poți bifa disponibilitate.</div>}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4, marginBottom: 6 }}>
             {RO_WEEKDAYS.map(w => <div key={w} style={{ textAlign: "center", fontSize: 10, color: C.textDim, fontWeight: 700, textTransform: "uppercase" }}>{w}</div>)}
           </div>
@@ -891,23 +971,24 @@ function AvailabilityModule() {
               const statuses = dayStatuses(date)
               const hasOcupat = statuses.some(s => s.status === "ocupat")
               const hasLiber = statuses.some(s => s.status === "liber")
+              const hasEvents = dayEvents(date).length > 0
               const isToday = date === todayIso
               return (
                 <button
                   key={i}
                   onClick={() => setDayModal(date)}
-                  disabled={vendors.length === 0}
                   style={{
                     aspectRatio: "1", borderRadius: 10, border: `1.5px solid ${isToday ? C.accent : C.border}`,
-                    background: C.surfaceHi, color: C.textPri, cursor: vendors.length === 0 ? "default" : "pointer", display: "flex", flexDirection: "column",
+                    background: C.surfaceHi, color: C.textPri, cursor: "pointer", display: "flex", flexDirection: "column",
                     alignItems: "center", justifyContent: "center", gap: 3, padding: 2, fontFamily: "inherit"
                   }}
                 >
                   <span style={{ fontSize: 12, fontWeight: isToday ? 800 : 500 }}>{d}</span>
-                  {(hasLiber || hasOcupat) && (
+                  {(hasLiber || hasOcupat || hasEvents) && (
                     <div style={{ display: "flex", gap: 2 }}>
                       {hasLiber && <div style={{ width: 5, height: 5, borderRadius: "50%", background: C.sage }} />}
                       {hasOcupat && <div style={{ width: 5, height: 5, borderRadius: "50%", background: C.danger }} />}
+                      {hasEvents && <div style={{ width: 5, height: 5, borderRadius: "50%", background: C.purple }} />}
                     </div>
                   )}
                 </button>
@@ -925,25 +1006,44 @@ function AvailabilityModule() {
               <div style={S.modalTitle}>{fmtDateRo(dayModal)}</div>
               <button style={{ ...S.btn("ghost"), padding: 4 }} onClick={() => setDayModal(null)}><XIcon /></button>
             </div>
-            {vendors.length === 0 && <div style={{ fontSize: 13, color: C.textDim }}>Niciun furnizor adăugat încă.</div>}
-            <div style={{ maxHeight: 420, overflowY: "auto" }}>
-              {vendors.map(v => {
-                const status = availability.find(a => a.vendorId === v.id && a.date === dayModal)?.status || null
-                return (
-                  <div key={v.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 4px", borderBottom: `1px solid ${C.border}`, gap: 10 }}>
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ fontSize: 13, fontWeight: 600 }}>{v.name}</div>
-                      <div style={{ fontSize: 11, color: C.textDim }}>{v.category}</div>
+
+            <div style={{ marginBottom: 20 }}>
+              <label style={S.label}>Evenimente</label>
+              {dayEvents(dayModal).length === 0 && <div style={{ fontSize: 13, color: C.textDim, padding: "4px 0" }}>Niciun eveniment în ziua asta.</div>}
+              {dayEvents(dayModal).map(ev => (
+                <div key={ev.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 10px", background: C.surfaceHi, borderRadius: 8, marginBottom: 5 }}>
+                  <span style={{ fontSize: 13 }}>{ev.title}</span>
+                  <button style={{ ...S.btn("ghost"), padding: "2px 4px", color: C.danger }} onClick={() => removeEvent(ev.id)}><XIcon size={14} /></button>
+                </div>
+              ))}
+              <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                <input style={{ ...S.input, flex: 1 }} placeholder="ex: Post, întâlnire cu..." value={newEventTitle} onChange={e => setNewEventTitle(e.target.value)} onKeyDown={e => { if (e.key === "Enter") addEvent() }} />
+                <button style={S.btn("purple")} onClick={addEvent}>Adaugă</button>
+              </div>
+            </div>
+
+            <div>
+              <label style={S.label}>Furnizori</label>
+              {vendors.length === 0 && <div style={{ fontSize: 13, color: C.textDim }}>Niciun furnizor adăugat încă.</div>}
+              <div style={{ maxHeight: 340, overflowY: "auto" }}>
+                {vendors.map(v => {
+                  const status = availability.find(a => a.vendorId === v.id && a.date === dayModal)?.status || null
+                  return (
+                    <div key={v.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 4px", borderBottom: `1px solid ${C.border}`, gap: 10 }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 600 }}>{v.name}</div>
+                        <div style={{ fontSize: 11, color: C.textDim }}>{v.category}</div>
+                      </div>
+                      <button
+                        style={{ ...S.btn(status === "liber" ? "sage" : status === "ocupat" ? "danger" : "outline"), minWidth: 84, justifyContent: "center", flexShrink: 0 }}
+                        onClick={() => cycleAvailability(v.id, dayModal)}
+                      >
+                        {status === "liber" ? "Liber" : status === "ocupat" ? "Ocupat" : "Nu știu"}
+                      </button>
                     </div>
-                    <button
-                      style={{ ...S.btn(status === "liber" ? "sage" : status === "ocupat" ? "danger" : "outline"), minWidth: 84, justifyContent: "center", flexShrink: 0 }}
-                      onClick={() => cycleAvailability(v.id, dayModal)}
-                    >
-                      {status === "liber" ? "Liber" : status === "ocupat" ? "Ocupat" : "Nu știu"}
-                    </button>
-                  </div>
-                )
-              })}
+                  )
+                })}
+              </div>
             </div>
           </div>
         </div>
