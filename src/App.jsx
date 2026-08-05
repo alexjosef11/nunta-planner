@@ -71,6 +71,14 @@ const globalStyles = `
   .fadeup { animation: fadeUp 0.2s ease; }
   @keyframes spin { to { transform: rotate(360deg); } }
   .spin { animation: spin 1s linear infinite; }
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.75); display: flex; align-items: flex-end; justify-content: center; z-index: 999; padding: 0; }
+  .modal-box { background: ${C.surface}; border-radius: 22px 22px 0 0; padding: 20px 22px 40px; max-width: 600px; width: 100%; box-shadow: 0 -8px 60px rgba(0,0,0,0.7); max-height: 92vh; overflow-y: auto; border: 1px solid ${C.border}; border-bottom: none; box-sizing: border-box; }
+  .modal-handle { width: 36px; height: 4px; background: ${C.border}; border-radius: 4px; margin: 0 auto 18px; display: block; }
+  @media (min-width: 768px) {
+    .modal-overlay { align-items: center; padding: 24px; }
+    .modal-box { border-radius: 20px; padding: 24px 26px 26px; border-bottom: 1px solid ${C.border}; max-height: 85vh; box-shadow: 0 24px 70px rgba(0,0,0,0.55); }
+    .modal-handle { display: none; }
+  }
 `
 
 // ─── STYLES ───────────────────────────────────────────────────────────────────
@@ -112,9 +120,6 @@ const S = {
     const { bg, text } = map[color] || map.neutral
     return { display: "inline-flex", alignItems: "center", padding: "3px 9px", borderRadius: 20, background: bg, color: text, fontSize: 11, fontWeight: 700, letterSpacing: "0.04em", whiteSpace: "nowrap" }
   },
-  modal: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 999, padding: 0 },
-  modalBox: { background: C.surface, borderRadius: "22px 22px 0 0", padding: "20px 22px 40px", maxWidth: 600, width: "100%", boxShadow: "0 -8px 60px rgba(0,0,0,0.7)", maxHeight: "92vh", overflowY: "auto", border: `1px solid ${C.border}`, borderBottom: "none" },
-  modalHandle: { width: 36, height: 4, background: C.border, borderRadius: 4, margin: "0 auto 18px", display: "block" },
   modalTitle: { fontSize: 17, marginBottom: 16, color: C.textPri, fontWeight: 700, letterSpacing: "-0.02em" },
   formGroup: { marginBottom: 14 },
   row: { display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" },
@@ -195,7 +200,8 @@ function GuestsModule() {
   const [modal, setModal] = useState(null)
   const [groupModal, setGroupModal] = useState(null)
   const [groupForm, setGroupForm] = useState({ name: "" })
-  const [groupViewId, setGroupViewId] = useState(null)
+  const [groupMemberSearch, setGroupMemberSearch] = useState("")
+  const [numTables, setNumTables] = useState("1")
   const [genMsg, setGenMsg] = useState("")
 
   const emptyGuest = { name: "", side: "Mireasă", rsvp: "în așteptare", dietary: "", phone: "", groupId: "", companions: [] }
@@ -203,7 +209,7 @@ function GuestsModule() {
   const [compForm, setCompForm] = useState({ name: "", type: "adult" })
   const [showCompForm, setShowCompForm] = useState(false)
 
-  useLockBodyScroll(Boolean(modal) || Boolean(groupModal) || Boolean(groupViewId))
+  useLockBodyScroll(Boolean(modal) || Boolean(groupModal))
   useEffect(() => { setPage(1) }, [search, filter])
 
   const openAdd = () => { setForm(emptyGuest); setShowCompForm(false); setModal("add") }
@@ -230,31 +236,49 @@ function GuestsModule() {
   }
   const remove = (id) => { if (window.confirm("Ștergi invitatul?")) setGuests(prev => prev.filter(g => g.id !== id)) }
 
-  const openAddGroup = () => { setGroupForm({ name: "" }); setGroupModal("add") }
-  const openEditGroup = (g) => { setGroupForm({ name: g.name }); setGroupModal(g) }
-  const openGroupView = (id) => { setGroupViewId(id); setGenMsg("") }
-  const closeGroupView = () => { setGroupViewId(null); setGenMsg("") }
+  const openAddGroup = () => { setGroupForm({ name: "" }); setGroupMemberSearch(""); setNumTables("1"); setGenMsg(""); setGroupModal("add") }
+  const openGroupDetail = (id) => {
+    const g = groups.find(x => x.id === id)
+    if (!g) return
+    setGroupForm({ name: g.name }); setGroupMemberSearch(""); setNumTables("1"); setGenMsg(""); setGroupModal(id)
+  }
+  const closeGroupModal = () => { setGroupModal(null); setGroupForm({ name: "" }); setGenMsg("") }
   const saveGroup = () => {
     if (!groupForm.name.trim()) return
-    if (groupModal === "add") setGroups(prev => [...prev, { id: Date.now(), name: groupForm.name }])
-    else setGroups(prev => prev.map(g => g.id === groupModal.id ? { ...g, name: groupForm.name } : g))
-    setGroupForm({ name: "" }); setGroupModal(null)
+    if (groupModal === "add") {
+      const newId = Date.now()
+      setGroups(prev => [...prev, { id: newId, name: groupForm.name }])
+      setGroupModal(newId)
+    } else {
+      setGroups(prev => prev.map(g => g.id === groupModal ? { ...g, name: groupForm.name } : g))
+    }
   }
   const removeGroup = (id) => {
     setGroups(prev => prev.filter(g => g.id !== id))
     setGuests(prev => prev.map(g => g.groupId === id ? { ...g, groupId: "" } : g))
-    if (groupViewId === id) closeGroupView()
+    if (groupModal === id) closeGroupModal()
   }
 
   const groupMembers = (id) => guests.filter(g => String(g.groupId) === String(id))
   const groupPeopleCount = (id) => groupMembers(id).reduce((a, g) => a + 1 + (g.companions?.length || 0), 0)
+  const addMemberToGroup = (guestId, groupId) => setGuests(prev => prev.map(g => g.id === guestId ? { ...g, groupId } : g))
+  const removeMemberFromGroup = (guestId) => setGuests(prev => prev.map(g => g.id === guestId ? { ...g, groupId: "" } : g))
 
-  const generateTableFromGroup = (group) => {
+  const generateTablesFromGroup = (group, count) => {
     const members = groupMembers(group.id)
-    const seats = members.flatMap(g => [g.id, ...(g.companions || []).map(c => `${g.id}_${c.id}`)])
-    if (seats.length === 0) return
-    setTables(prev => [...prev, { id: Date.now(), name: group.name, capacity: seats.length, seats }])
-    setGenMsg(`Masă „${group.name}” creată cu ${seats.length} locuri — o găsești în Plan mese.`)
+    const seatEntries = members.flatMap(g => [g.id, ...(g.companions || []).map(c => `${g.id}_${c.id}`)])
+    if (seatEntries.length === 0) return
+    const n = Math.max(1, Math.min(count, seatEntries.length))
+    const perTable = Math.ceil(seatEntries.length / n)
+    const chunks = []
+    for (let i = 0; i < n; i++) {
+      const chunk = seatEntries.slice(i * perTable, (i + 1) * perTable)
+      if (chunk.length) chunks.push(chunk)
+    }
+    setTables(prev => [...prev, ...chunks.map((chunk, i) => ({ id: Date.now() + i, name: chunks.length === 1 ? group.name : `${group.name} ${i + 1}`, capacity: chunk.length, seats: chunk }))])
+    setGenMsg(chunks.length === 1
+      ? `Masă „${group.name}” creată cu ${seatEntries.length} locuri — o găsești în Plan mese.`
+      : `${chunks.length} mese create (${seatEntries.length} locuri total) — le găsești în Plan mese.`)
   }
 
   const exportGuests = () => {
@@ -278,7 +302,9 @@ function GuestsModule() {
   const paged = filtered.slice((pageSafe - 1) * GUESTS_PAGE_SIZE, pageSafe * GUESTS_PAGE_SIZE)
   const rsvpColor = (r) => r === "confirmat" ? "sage" : r === "refuzat" ? "danger" : "neutral"
   const groupName = (id) => groups.find(g => String(g.id) === String(id))?.name
-  const viewedGroup = groupViewId ? groups.find(g => g.id === groupViewId) : null
+  const currentGroup = (groupModal && groupModal !== "add") ? groups.find(g => g.id === groupModal) : null
+  const trimmedName = form.name.trim().toLowerCase()
+  const isDuplicateName = Boolean(modal) && trimmedName && guests.some(g => g.name.trim().toLowerCase() === trimmedName && (modal === "add" || g.id !== modal.id))
 
   return (
     <div className="fadeup">
@@ -298,11 +324,11 @@ function GuestsModule() {
           {groups.length === 0 && <span style={{ fontSize: 13, color: C.textDim }}>Niciun grup.</span>}
           {groups.map(g => (
             <div key={g.id} style={{ display: "inline-flex", alignItems: "center", gap: 4, background: C.purpleDim, borderRadius: 20, padding: "4px 6px 4px 12px" }}>
-              <button style={{ background: "none", border: "none", cursor: "pointer", padding: 0, display: "flex", alignItems: "center", gap: 6 }} onClick={() => openGroupView(g.id)}>
+              <button style={{ background: "none", border: "none", cursor: "pointer", padding: 0, display: "flex", alignItems: "center", gap: 6 }} onClick={() => openGroupDetail(g.id)}>
                 <span style={{ fontSize: 12, color: C.purple, fontWeight: 700 }}>{g.name}</span>
                 <span style={{ fontSize: 11, color: C.textDim }}>({guests.filter(gu => String(gu.groupId) === String(g.id)).length})</span>
+                <EditIcon size={11} />
               </button>
-              <button style={{ background: "none", border: "none", cursor: "pointer", color: C.textDim, padding: "0 2px", lineHeight: 1, display: "flex" }} onClick={() => openEditGroup(g)}><EditIcon size={12} /></button>
               <button style={{ background: "none", border: "none", cursor: "pointer", color: C.textDim, padding: "0 2px", lineHeight: 1, display: "flex" }} onClick={() => removeGroup(g.id)}><XIcon size={12} /></button>
             </div>
           ))}
@@ -370,14 +396,18 @@ function GuestsModule() {
 
       {/* Guest Modal */}
       {modal && (
-        <div style={S.modal} onClick={e => { if (e.target === e.currentTarget) setModal(null) }}>
-          <div style={S.modalBox}>
-            <div style={S.modalHandle} />
+        <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) setModal(null) }}>
+          <div className="modal-box">
+            <div className="modal-handle" />
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
               <div style={S.modalTitle}>{modal === "add" ? "Invitat nou" : "Editează invitat"}</div>
               <button style={{ ...S.btn("ghost"), padding: 4 }} onClick={() => setModal(null)}><XIcon /></button>
             </div>
-            <div style={S.formGroup}><label style={S.label}>Nume complet *</label><input style={S.input} placeholder="ex: Ion și Maria Popescu" value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} /></div>
+            <div style={S.formGroup}>
+              <label style={S.label}>Nume complet *</label>
+              <input style={S.input} placeholder="ex: Ion și Maria Popescu" value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} />
+              {isDuplicateName && <div style={{ fontSize: 11, color: C.gold, marginTop: 6 }}>⚠️ Există deja un invitat cu acest nume — poți continua dacă e intenționat.</div>}
+            </div>
             <div style={{ ...S.row, marginBottom: 14 }}>
               <div style={S.col(1)}><label style={S.label}>Partea</label><select style={S.select} value={form.side} onChange={e => setForm(p => ({ ...p, side: e.target.value }))}><option>Mireasă</option><option>Mire</option></select></div>
               <div style={S.col(1)}><label style={S.label}>RSVP</label><select style={S.select} value={form.rsvp} onChange={e => setForm(p => ({ ...p, rsvp: e.target.value }))}><option>în așteptare</option><option>confirmat</option><option>refuzat</option></select></div>
@@ -415,48 +445,74 @@ function GuestsModule() {
         </div>
       )}
 
-      {/* Group Modal (add / edit) */}
+      {/* Group Modal (add / manage) */}
       {groupModal && (
-        <div style={S.modal} onClick={e => { if (e.target === e.currentTarget) setGroupModal(null) }}>
-          <div style={S.modalBox}>
-            <div style={S.modalHandle} />
-            <div style={S.modalTitle}>{groupModal === "add" ? "Grup nou" : "Editează grup"}</div>
-            <div style={S.formGroup}><label style={S.label}>Numele grupului</label><input style={S.input} placeholder="ex: Prieteni facultate" value={groupForm.name} onChange={e => setGroupForm({ name: e.target.value })} /></div>
-            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-              <button style={S.btn("outline")} onClick={() => setGroupModal(null)}>Anulează</button>
+        <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) closeGroupModal() }}>
+          <div className="modal-box">
+            <div className="modal-handle" />
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <div style={S.modalTitle}>{groupModal === "add" ? "Grup nou" : "Editează grup"}</div>
+              <button style={{ ...S.btn("ghost"), padding: 4 }} onClick={closeGroupModal}><XIcon /></button>
+            </div>
+
+            <div style={{ ...S.row, marginBottom: groupModal === "add" ? 0 : 20 }}>
+              <div style={S.col(1)}>
+                <label style={S.label}>Numele grupului</label>
+                <input style={S.input} placeholder="ex: Prieteni facultate" value={groupForm.name} onChange={e => setGroupForm({ name: e.target.value })} />
+              </div>
               <button style={S.btn("purple")} onClick={saveGroup}>{groupModal === "add" ? "Creează" : "Salvează"}</button>
             </div>
-          </div>
-        </div>
-      )}
 
-      {/* Group members view */}
-      {viewedGroup && (
-        <div style={S.modal} onClick={e => { if (e.target === e.currentTarget) closeGroupView() }}>
-          <div style={S.modalBox}>
-            <div style={S.modalHandle} />
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-              <div style={S.modalTitle}>{viewedGroup.name}</div>
-              <button style={{ ...S.btn("ghost"), padding: 4 }} onClick={closeGroupView}><XIcon /></button>
-            </div>
-            <div style={{ fontSize: 12, color: C.textDim, marginBottom: 14 }}>{groupPeopleCount(viewedGroup.id)} persoane în total</div>
-            <div style={{ maxHeight: 320, overflowY: "auto", marginBottom: 16 }}>
-              {groupMembers(viewedGroup.id).length === 0 && <div style={{ fontSize: 13, color: C.textDim }}>Niciun invitat în acest grup încă.</div>}
-              {groupMembers(viewedGroup.id).map(g => (
-                <div key={g.id} style={{ padding: "8px 4px", borderBottom: `1px solid ${C.border}` }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                    <span style={{ fontSize: 13, fontWeight: 600 }}>{g.name}</span>
-                    <span style={S.badge(rsvpColor(g.rsvp))}>{g.rsvp}</span>
+            {currentGroup && (
+              <>
+                <div style={{ marginBottom: 20 }}>
+                  <label style={S.label}>Membri ({groupPeopleCount(currentGroup.id)} persoane)</label>
+                  {groupMembers(currentGroup.id).length === 0 && <div style={{ fontSize: 13, color: C.textDim, padding: "6px 0" }}>Niciun invitat în acest grup încă.</div>}
+                  <div style={{ maxHeight: 220, overflowY: "auto" }}>
+                    {groupMembers(currentGroup.id).map(g => (
+                      <div key={g.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "7px 4px", borderBottom: `1px solid ${C.border}` }}>
+                        <div style={{ minWidth: 0 }}>
+                          <span style={{ fontSize: 13, fontWeight: 600 }}>{g.name}</span>
+                          {(g.companions || []).length > 0 && <span style={{ fontSize: 11, color: C.textDim, marginLeft: 6 }}>+{g.companions.length}</span>}
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                          <span style={S.badge(rsvpColor(g.rsvp))}>{g.rsvp}</span>
+                          <button style={{ ...S.btn("ghost"), padding: "2px 4px", color: C.danger }} onClick={() => removeMemberFromGroup(g.id)}><XIcon size={14} /></button>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                  {(g.companions || []).length > 0 && <div style={{ fontSize: 11, color: C.textDim, marginTop: 2 }}>+ {g.companions.map(c => c.name).join(", ")}</div>}
                 </div>
-              ))}
-            </div>
-            {genMsg && <div style={{ fontSize: 12, color: C.sage, marginBottom: 12 }}>{genMsg}</div>}
-            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-              <button style={S.btn("outline")} onClick={closeGroupView}>Închide</button>
-              <button style={S.btn("sage")} disabled={groupMembers(viewedGroup.id).length === 0} onClick={() => generateTableFromGroup(viewedGroup)}><TableIcon /> Generează masă</button>
-            </div>
+
+                <div style={{ marginBottom: 20 }}>
+                  <label style={S.label}>Adaugă invitați în grup</label>
+                  <input style={{ ...S.input, marginBottom: 8 }} placeholder="Caută invitat..." value={groupMemberSearch} onChange={e => setGroupMemberSearch(e.target.value)} />
+                  <div style={{ maxHeight: 200, overflowY: "auto" }}>
+                    {guests.filter(g => String(g.groupId) !== String(currentGroup.id) && g.name.toLowerCase().includes(groupMemberSearch.toLowerCase())).map(g => (
+                      <div key={g.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 4px", borderBottom: `1px solid ${C.border}` }}>
+                        <div style={{ minWidth: 0 }}>
+                          <span style={{ fontSize: 13 }}>{g.name}</span>
+                          {groupName(g.groupId) && <span style={{ fontSize: 11, color: C.textDim, marginLeft: 6 }}>(în {groupName(g.groupId)})</span>}
+                        </div>
+                        <button style={S.btn("sage")} onClick={() => addMemberToGroup(g.id, currentGroup.id)}>Adaugă</button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 16 }}>
+                  <label style={S.label}>Generează masă/mese din grup</label>
+                  <div style={{ display: "flex", gap: 8, alignItems: "flex-end", marginBottom: 8 }}>
+                    <div style={S.col(1)}>
+                      <label style={{ ...S.label, fontSize: 10 }}>Câte mese?</label>
+                      <input style={S.input} type="number" min={1} max={Math.max(1, groupPeopleCount(currentGroup.id))} value={numTables} onChange={e => setNumTables(e.target.value)} />
+                    </div>
+                    <button style={S.btn("sage")} disabled={groupMembers(currentGroup.id).length === 0} onClick={() => generateTablesFromGroup(currentGroup, Math.max(1, parseInt(numTables) || 1))}><TableIcon /> Generează</button>
+                  </div>
+                  {genMsg && <div style={{ fontSize: 12, color: C.sage }}>{genMsg}</div>}
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -550,9 +606,9 @@ function TodoModule() {
         </div>
       </div>
       {modal && (
-        <div style={S.modal} onClick={e => { if (e.target === e.currentTarget) setModal(null) }}>
-          <div style={S.modalBox}>
-            <div style={S.modalHandle} />
+        <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) setModal(null) }}>
+          <div className="modal-box">
+            <div className="modal-handle" />
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
               <div style={S.modalTitle}>{modal === "add" ? "Task nou" : "Editează task"}</div>
               <button style={{ ...S.btn("ghost"), padding: 4 }} onClick={() => setModal(null)}><XIcon /></button>
@@ -666,9 +722,9 @@ function VendorsModule() {
       </div>
 
       {modal && (
-        <div style={S.modal} onClick={e => { if (e.target === e.currentTarget) setModal(null) }}>
-          <div style={S.modalBox}>
-            <div style={S.modalHandle} />
+        <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) setModal(null) }}>
+          <div className="modal-box">
+            <div className="modal-handle" />
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
               <div style={S.modalTitle}>{modal === "add" ? "Furnizor nou" : "Editează furnizor"}</div>
               <button style={{ ...S.btn("ghost"), padding: 4 }} onClick={() => setModal(null)}><XIcon /></button>
@@ -933,9 +989,9 @@ function SeatingModule() {
         </div>
       )}
       {modal && (
-        <div style={S.modal} onClick={e => { if (e.target === e.currentTarget) setModal(null) }}>
-          <div style={S.modalBox}>
-            <div style={S.modalHandle} />
+        <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) setModal(null) }}>
+          <div className="modal-box">
+            <div className="modal-handle" />
             <div style={S.modalTitle}>{modal === "add" ? "Masă nouă" : "Editează masă"}</div>
             <div style={S.formGroup}><label style={S.label}>Numele mesei</label><input style={S.input} placeholder="ex: Masa mirilor, Masa 1..." value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} /></div>
             <div style={S.formGroup}>
@@ -960,9 +1016,9 @@ function SeatingModule() {
         const personId = t.seats[seatModal.seatIndex]
         const available = allPeople.filter(p => !assignedIds.has(p.id))
         return (
-          <div style={S.modal} onClick={e => { if (e.target === e.currentTarget) setSeatModal(null) }}>
-            <div style={S.modalBox}>
-              <div style={S.modalHandle} />
+          <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) setSeatModal(null) }}>
+            <div className="modal-box">
+              <div className="modal-handle" />
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
                 <div style={S.modalTitle}>{t.name} · scaun {seatModal.seatIndex + 1}</div>
                 <button style={{ ...S.btn("ghost"), padding: 4 }} onClick={() => setSeatModal(null)}><XIcon /></button>
@@ -1123,9 +1179,9 @@ function BudgetModule() {
       </div>
 
       {modal && (
-        <div style={S.modal} onClick={e => { if (e.target === e.currentTarget) setModal(null) }}>
-          <div style={S.modalBox}>
-            <div style={S.modalHandle} />
+        <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) setModal(null) }}>
+          <div className="modal-box">
+            <div className="modal-handle" />
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
               <div style={S.modalTitle}>{modal === "add" ? "Cheltuială nouă" : "Editează"}</div>
               <button style={{ ...S.btn("ghost"), padding: 4 }} onClick={() => setModal(null)}><XIcon /></button>
