@@ -703,28 +703,156 @@ function VendorsModule() {
 }
 
 // ─── SEATING MODULE ───────────────────────────────────────────────────────────
+const SEAT = 34
+const SEAT_GAP = 14
+const TABLE_GRID_STEP = 240
+
+function tableDefaultPos(i) {
+  return { x: 40 + (i % 4) * TABLE_GRID_STEP, y: 40 + Math.floor(i / 4) * TABLE_GRID_STEP }
+}
+
+function normalizeTable(t, i) {
+  const shape = t.shape === "rect" ? "rect" : "round"
+  const capacity = Math.max(1, t.capacity || 8)
+  const rawSeats = Array.isArray(t.seats) ? t.seats : []
+  const seats = Array.from({ length: capacity }, (_, idx) => rawSeats[idx] ?? null)
+  const pos = tableDefaultPos(i)
+  const x = typeof t.x === "number" ? t.x : pos.x
+  const y = typeof t.y === "number" ? t.y : pos.y
+  return { ...t, shape, capacity, seats, x, y }
+}
+
+function getTableLayout(shape, capacity) {
+  if (shape === "rect") {
+    const top = Math.ceil(capacity / 2)
+    const bottom = capacity - top
+    const perSide = Math.max(top, bottom, 1)
+    const rectW = Math.max(150, perSide * 56)
+    const rectH = 86
+    const boxW = rectW + SEAT
+    const boxH = rectH + 2 * (SEAT + SEAT_GAP)
+    const shapeX = (boxW - rectW) / 2
+    const shapeY = SEAT + SEAT_GAP
+    const seats = []
+    for (let i = 0; i < top; i++) seats.push({ x: shapeX + (rectW / top) * (i + 0.5), y: shapeY - SEAT_GAP - SEAT / 2 })
+    for (let i = 0; i < bottom; i++) seats.push({ x: shapeX + (rectW / (bottom || 1)) * (i + 0.5), y: shapeY + rectH + SEAT_GAP + SEAT / 2 })
+    return { boxW, boxH, shapeBox: { x: shapeX, y: shapeY, w: rectW, h: rectH }, seats }
+  }
+  const d = Math.min(190, 70 + Math.max(0, capacity - 4) * 8)
+  const r = d / 2
+  const seatR = r + SEAT_GAP + SEAT / 2
+  const boxSize = 2 * (seatR + SEAT / 2)
+  const cx = boxSize / 2, cy = boxSize / 2
+  const seats = []
+  for (let i = 0; i < capacity; i++) {
+    const angle = (2 * Math.PI * i) / capacity - Math.PI / 2
+    seats.push({ x: cx + seatR * Math.cos(angle), y: cy + seatR * Math.sin(angle) })
+  }
+  return { boxW: boxSize, boxH: boxSize, shapeBox: { x: cx - r, y: cy - r, w: d, h: d }, seats }
+}
+
 function SeatingModule() {
   const [guests] = useSharedState("wedding_guests", [])
   const [tables, setTables, synced] = useSharedState("wedding_tables", [])
   const [modal, setModal] = useState(null)
-  const [form, setForm] = useState({ name: "", capacity: 8 })
-  const [assignModal, setAssignModal] = useState(null)
+  const [form, setForm] = useState({ name: "", shape: "round", capacity: 8 })
+  const [capacityError, setCapacityError] = useState("")
+  const [seatModal, setSeatModal] = useState(null)
+  const [livePos, setLivePos] = useState(null)
 
-  useLockBodyScroll(Boolean(modal) || Boolean(assignModal))
+  useLockBodyScroll(Boolean(modal) || Boolean(seatModal))
 
-  const addTable = () => { if (!form.name.trim()) return; setTables(prev => [...prev, { ...form, id: Date.now(), seats: [] }]); setModal(null) }
-  const removeTable = (id) => { if (window.confirm("Ștergi masa?")) setTables(prev => prev.filter(t => t.id !== id)) }
-  const assignGuest = (tId, gId) => setTables(prev => prev.map(t => t.id !== tId || t.seats.includes(gId) || t.seats.length >= t.capacity ? t : { ...t, seats: [...t.seats, gId] }))
-  const removeFromTable = (tId, gId) => setTables(prev => prev.map(t => t.id === tId ? { ...t, seats: t.seats.filter(id => id !== gId) } : t))
+  const normTables = tables.map((t, i) => normalizeTable(t, i))
+
+  const updateTable = (id, patch) => {
+    setTables(prev => {
+      const norm = prev.map((t, i) => normalizeTable(t, i))
+      return norm.map(t => t.id === id ? { ...t, ...patch } : t)
+    })
+  }
+
+  const openAddTable = () => { setForm({ name: "", shape: "round", capacity: 8 }); setCapacityError(""); setModal("add") }
+  const openEditTable = (t) => { setForm({ name: t.name, shape: t.shape, capacity: t.capacity }); setCapacityError(""); setModal(t) }
+
+  const addTable = () => {
+    if (!form.name.trim()) return
+    const capacity = Math.max(1, parseInt(form.capacity) || 8)
+    const pos = tableDefaultPos(tables.length)
+    const newTable = { id: Date.now(), name: form.name, shape: form.shape, capacity, seats: Array(capacity).fill(null), x: pos.x, y: pos.y }
+    setTables(prev => [...prev.map((t, i) => normalizeTable(t, i)), newTable])
+    setModal(null)
+  }
+  const saveEditTable = () => {
+    if (!form.name.trim()) return
+    const capacity = Math.max(1, parseInt(form.capacity) || 8)
+    const t = normTables.find(tt => tt.id === modal.id)
+    const occupied = t.seats.filter(Boolean).length
+    if (capacity < occupied) { setCapacityError(`Eliberează ${occupied - capacity} scaune înainte să reduci capacitatea.`); return }
+    const seats = Array.from({ length: capacity }, (_, idx) => t.seats[idx] ?? null)
+    updateTable(modal.id, { name: form.name, shape: form.shape, capacity, seats })
+    setModal(null); setCapacityError("")
+  }
+  const saveTable = () => modal === "add" ? addTable() : saveEditTable()
+
+  const removeTable = (id) => {
+    if (!window.confirm("Ștergi masa?")) return
+    setTables(prev => prev.filter(t => t.id !== id))
+    if (seatModal?.tableId === id) setSeatModal(null)
+  }
+
+  const assignSeat = (tableId, seatIndex, personId) => {
+    const t = normTables.find(tt => tt.id === tableId)
+    if (!t) return
+    const seats = t.seats.slice()
+    seats[seatIndex] = personId
+    updateTable(tableId, { seats })
+    setSeatModal(null)
+  }
+  const freeSeat = (tableId, seatIndex) => {
+    const t = normTables.find(tt => tt.id === tableId)
+    if (!t) return
+    const seats = t.seats.slice()
+    seats[seatIndex] = null
+    updateTable(tableId, { seats })
+    setSeatModal(null)
+  }
+
+  const startDrag = (e, table) => {
+    e.preventDefault()
+    const startClientX = e.clientX, startClientY = e.clientY
+    const origX = table.x, origY = table.y
+    const onMove = (ev) => {
+      const nx = Math.max(0, origX + (ev.clientX - startClientX))
+      const ny = Math.max(0, origY + (ev.clientY - startClientY))
+      setLivePos({ id: table.id, x: nx, y: ny })
+    }
+    const onUp = (ev) => {
+      window.removeEventListener("pointermove", onMove)
+      window.removeEventListener("pointerup", onUp)
+      const nx = Math.max(0, origX + (ev.clientX - startClientX))
+      const ny = Math.max(0, origY + (ev.clientY - startClientY))
+      updateTable(table.id, { x: nx, y: ny })
+      setLivePos(null)
+    }
+    window.addEventListener("pointermove", onMove)
+    window.addEventListener("pointerup", onUp)
+  }
 
   const allPeople = guests.flatMap(g => [
     { id: g.id, name: g.name, rsvp: g.rsvp, isComp: false },
     ...(g.companions || []).map(c => ({ id: `${g.id}_${c.id}`, name: `${c.name} (cu ${g.name})`, rsvp: g.rsvp, isComp: true }))
   ])
-  const assignedIds = new Set(tables.flatMap(t => t.seats))
+  const assignedIds = new Set(normTables.flatMap(t => t.seats.filter(Boolean)))
   const confirmed = allPeople.filter(p => p.rsvp === "confirmat")
   const unassigned = confirmed.filter(p => !assignedIds.has(p.id))
   const personName = (id) => allPeople.find(p => p.id === id)?.name || String(id)
+  const personRsvp = (id) => allPeople.find(p => p.id === id)?.rsvp
+
+  const canvasSize = normTables.reduce((acc, t) => {
+    const { x, y } = livePos?.id === t.id ? livePos : t
+    const { boxW, boxH } = getTableLayout(t.shape, t.capacity)
+    return { w: Math.max(acc.w, x + boxW + 300), h: Math.max(acc.h, y + boxH + 300) }
+  }, { w: 1200, h: 800 })
 
   return (
     <div className="fadeup">
@@ -742,78 +870,131 @@ function SeatingModule() {
         </div>
       )}
       <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
-        <button style={S.btn("primary")} onClick={() => { setForm({ name: "", capacity: 8 }); setModal("add") }}><PlusIcon /> Masă nouă</button>
+        <button style={S.btn("primary")} onClick={openAddTable}><PlusIcon /> Masă nouă</button>
       </div>
       {!synced && <div style={S.emptyState}><div className="spin" style={{ width: 24, height: 24, border: `2px solid ${C.border}`, borderTopColor: C.accent, borderRadius: "50%", margin: "0 auto" }} /></div>}
       {synced && tables.length === 0 && <div style={{ ...S.card, ...S.emptyState }}><div style={{ fontSize: 28, marginBottom: 8, opacity: 0.3 }}>🪑</div><div style={{ fontSize: 13 }}>Adaugă mese și plasează invitații.</div></div>}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 14 }}>
-        {tables.map(table => {
-          const pct = Math.round(table.seats.length / table.capacity * 100)
-          return (
-            <div key={table.id} style={S.card}>
-              <div style={S.cardHeader}>
-                <div>
-                  <div style={S.cardTitle}>{table.name}</div>
-                  <div style={{ fontSize: 11, color: C.textDim, marginTop: 2 }}>{table.seats.length}/{table.capacity} locuri</div>
-                </div>
-                <div style={{ display: "flex", gap: 6 }}>
-                  <button style={S.btn("sage")} onClick={() => setAssignModal(table.id)}><PlusIcon /></button>
-                  <button style={{ ...S.btn("ghost"), padding: "6px 8px", color: C.danger }} onClick={() => removeTable(table.id)}><TrashIcon /></button>
-                </div>
-              </div>
-              <div style={S.cardBody}>
-                <div style={{ ...S.progressBar, marginBottom: 10 }}><div style={S.progressFill(pct, pct >= 100 ? C.accent : C.sage)} /></div>
-                {table.seats.length === 0 && <div style={{ fontSize: 12, color: C.textDim, fontStyle: "italic" }}>Masă goală</div>}
-                {table.seats.map(id => (
-                  <div key={id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 0", borderBottom: `1px solid ${C.border}` }}>
-                    <span style={{ fontSize: 13 }}>{personName(id)}</span>
-                    <button style={{ ...S.btn("ghost"), padding: "2px 4px", color: C.danger }} onClick={() => removeFromTable(table.id, id)}><XIcon size={14} /></button>
+      {synced && tables.length > 0 && (
+        <div style={{ ...S.card, padding: 0 }}>
+          <div style={S.cardHeader}>
+            <span style={S.cardTitle}>Sala</span>
+            <span style={{ fontSize: 11, color: C.textDim }}>Trage din mânerul mesei ca s-o muți</span>
+          </div>
+          <div style={{ overflow: "auto", maxHeight: "70vh", background: `radial-gradient(circle, ${C.border} 1px, transparent 1px)`, backgroundSize: "24px 24px" }}>
+            <div style={{ position: "relative", width: canvasSize.w, height: canvasSize.h }}>
+              {normTables.map(table => {
+                const pos = livePos?.id === table.id ? livePos : table
+                const { boxW, boxH, shapeBox, seats } = getTableLayout(table.shape, table.capacity)
+                const occupied = table.seats.filter(Boolean).length
+                return (
+                  <div key={table.id} style={{ position: "absolute", left: pos.x, top: pos.y }}>
+                    <div
+                      onPointerDown={e => startDrag(e, table)}
+                      style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8, cursor: "grab", touchAction: "none", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 20, padding: "4px 6px 4px 12px", width: "fit-content" }}
+                    >
+                      <span style={{ fontSize: 12, fontWeight: 700 }}>{table.name}</span>
+                      <span style={{ fontSize: 11, color: C.textDim }}>{occupied}/{table.capacity}</span>
+                      <button onPointerDown={e => e.stopPropagation()} onClick={() => openEditTable(table)} style={{ ...S.btn("ghost"), padding: "2px 4px" }}><EditIcon size={13} /></button>
+                      <button onPointerDown={e => e.stopPropagation()} onClick={() => removeTable(table.id)} style={{ ...S.btn("ghost"), padding: "2px 4px", color: C.danger }}><XIcon size={13} /></button>
+                    </div>
+                    <div style={{ position: "relative", width: boxW, height: boxH }}>
+                      <div style={{
+                        position: "absolute", left: shapeBox.x, top: shapeBox.y, width: shapeBox.w, height: shapeBox.h,
+                        borderRadius: table.shape === "rect" ? 16 : "50%",
+                        background: C.surfaceHi, border: `1.5px solid ${C.borderHi}`
+                      }} />
+                      {seats.map((s, idx) => {
+                        const personId = table.seats[idx]
+                        const filled = Boolean(personId)
+                        return (
+                          <button
+                            key={idx}
+                            title={filled ? personName(personId) : "Loc liber"}
+                            onClick={() => setSeatModal({ tableId: table.id, seatIndex: idx })}
+                            style={{
+                              position: "absolute", left: s.x - SEAT / 2, top: s.y - SEAT / 2, width: SEAT, height: SEAT, borderRadius: "50%",
+                              border: `1.5px solid ${filled ? C.accent : C.border}`,
+                              background: filled ? C.accentGrad : C.surfaceHi,
+                              color: filled ? "#fff" : C.textDim,
+                              fontSize: 10, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+                              padding: 0, lineHeight: 1, overflow: "hidden"
+                            }}
+                          >
+                            {filled ? personName(personId).slice(0, 2).toUpperCase() : "+"}
+                          </button>
+                        )
+                      })}
+                    </div>
                   </div>
-                ))}
-              </div>
-            </div>
-          )
-        })}
-      </div>
-      {modal === "add" && (
-        <div style={S.modal} onClick={e => { if (e.target === e.currentTarget) setModal(null) }}>
-          <div style={S.modalBox}>
-            <div style={S.modalHandle} />
-            <div style={S.modalTitle}>Masă nouă</div>
-            <div style={S.formGroup}><label style={S.label}>Numele mesei</label><input style={S.input} placeholder="ex: Masa mirilor, Masa 1..." value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} /></div>
-            <div style={S.formGroup}><label style={S.label}>Capacitate (locuri)</label><input style={S.input} type="number" min={1} max={30} value={form.capacity} onChange={e => setForm(p => ({ ...p, capacity: parseInt(e.target.value) || 8 }))} /></div>
-            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-              <button style={S.btn("outline")} onClick={() => setModal(null)}>Anulează</button>
-              <button style={S.btn("primary")} onClick={addTable}>Creează</button>
+                )
+              })}
             </div>
           </div>
         </div>
       )}
-      {assignModal && (() => {
-        const table = tables.find(t => t.id === assignModal)
-        if (!table) return null
-        const available = allPeople.filter(p => !table.seats.includes(p.id))
+      {modal && (
+        <div style={S.modal} onClick={e => { if (e.target === e.currentTarget) setModal(null) }}>
+          <div style={S.modalBox}>
+            <div style={S.modalHandle} />
+            <div style={S.modalTitle}>{modal === "add" ? "Masă nouă" : "Editează masă"}</div>
+            <div style={S.formGroup}><label style={S.label}>Numele mesei</label><input style={S.input} placeholder="ex: Masa mirilor, Masa 1..." value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} /></div>
+            <div style={S.formGroup}>
+              <label style={S.label}>Tip masă</label>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button style={{ ...S.btn(form.shape === "round" ? "primary" : "outline"), flex: 1, justifyContent: "center" }} onClick={() => setForm(p => ({ ...p, shape: "round" }))}>◯ Rotundă</button>
+                <button style={{ ...S.btn(form.shape === "rect" ? "primary" : "outline"), flex: 1, justifyContent: "center" }} onClick={() => setForm(p => ({ ...p, shape: "rect" }))}>▭ Dreptunghiulară</button>
+              </div>
+            </div>
+            <div style={S.formGroup}><label style={S.label}>Capacitate (locuri)</label><input style={S.input} type="number" min={1} max={30} value={form.capacity} onChange={e => setForm(p => ({ ...p, capacity: parseInt(e.target.value) || 8 }))} /></div>
+            {capacityError && <div style={{ fontSize: 12, color: C.danger, marginBottom: 12 }}>{capacityError}</div>}
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button style={S.btn("outline")} onClick={() => setModal(null)}>Anulează</button>
+              <button style={S.btn("primary")} onClick={saveTable}>{modal === "add" ? "Creează" : "Salvează"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {seatModal && (() => {
+        const t = normTables.find(tt => tt.id === seatModal.tableId)
+        if (!t) return null
+        const personId = t.seats[seatModal.seatIndex]
+        const available = allPeople.filter(p => !assignedIds.has(p.id))
         return (
-          <div style={S.modal} onClick={e => { if (e.target === e.currentTarget) setAssignModal(null) }}>
+          <div style={S.modal} onClick={e => { if (e.target === e.currentTarget) setSeatModal(null) }}>
             <div style={S.modalBox}>
               <div style={S.modalHandle} />
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-                <div style={S.modalTitle}>Adaugă la {table.name}</div>
-                <button style={{ ...S.btn("ghost"), padding: 4 }} onClick={() => setAssignModal(null)}><XIcon /></button>
+                <div style={S.modalTitle}>{t.name} · scaun {seatModal.seatIndex + 1}</div>
+                <button style={{ ...S.btn("ghost"), padding: 4 }} onClick={() => setSeatModal(null)}><XIcon /></button>
               </div>
-              {available.length === 0 && <div style={{ color: C.textDim, fontSize: 13 }}>Toți sunt plasați.</div>}
-              <div style={{ maxHeight: 360, overflowY: "auto" }}>
-                {available.map(p => (
-                  <div key={p.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 4px", borderBottom: `1px solid ${C.border}` }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <span style={{ fontSize: 13 }}>{p.name}</span>
-                      <span style={S.badge(p.rsvp === "confirmat" ? "sage" : "neutral")}>{p.rsvp}</span>
-                      {p.isComp && <span style={S.badge("purple")}>însoțitor</span>}
-                    </div>
-                    <button style={S.btn(table.seats.length >= table.capacity ? "outline" : "sage")} disabled={table.seats.length >= table.capacity} onClick={() => { assignGuest(table.id, p.id); setAssignModal(null) }}>Plasează</button>
+              {personId ? (
+                <>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 20 }}>
+                    <span style={{ fontSize: 14, fontWeight: 600 }}>{personName(personId)}</span>
+                    <span style={S.badge(personRsvp(personId) === "confirmat" ? "sage" : "neutral")}>{personRsvp(personId)}</span>
                   </div>
-                ))}
-              </div>
+                  <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                    <button style={S.btn("outline")} onClick={() => setSeatModal(null)}>Închide</button>
+                    <button style={S.btn("danger")} onClick={() => freeSeat(t.id, seatModal.seatIndex)}>Eliberează scaunul</button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  {available.length === 0 && <div style={{ color: C.textDim, fontSize: 13 }}>Toți sunt plasați.</div>}
+                  <div style={{ maxHeight: 360, overflowY: "auto" }}>
+                    {available.map(p => (
+                      <div key={p.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 4px", borderBottom: `1px solid ${C.border}` }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <span style={{ fontSize: 13 }}>{p.name}</span>
+                          <span style={S.badge(p.rsvp === "confirmat" ? "sage" : "neutral")}>{p.rsvp}</span>
+                          {p.isComp && <span style={S.badge("purple")}>însoțitor</span>}
+                        </div>
+                        <button style={S.btn("sage")} onClick={() => assignSeat(t.id, seatModal.seatIndex, p.id)}>Așază aici</button>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
           </div>
         )
