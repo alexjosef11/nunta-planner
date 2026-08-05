@@ -68,7 +68,7 @@ const globalStyles = `
   input, select, textarea { color-scheme: dark; }
   input:focus, select:focus, textarea:focus { outline: none; border-color: ${C.accent} !important; }
   @keyframes fadeUp { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
-  .fadeup { animation: fadeUp 0.2s ease both; }
+  .fadeup { animation: fadeUp 0.2s ease; }
   @keyframes spin { to { transform: rotate(360deg); } }
   .spin { animation: spin 1s linear infinite; }
 `
