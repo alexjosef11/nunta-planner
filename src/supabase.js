@@ -23,6 +23,23 @@ export async function dbSet(key, value) {
   if (error) console.error('dbSet error:', error)
 }
 
+// ── Storage: oferte (vendor PDF offers) ────────────────────────────────────────
+const OFFERS_BUCKET = 'oferte'
+
+export async function uploadOfferFile(vendorId, file) {
+  const safeName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_')
+  const path = `${vendorId}/${Date.now()}-${safeName}`
+  const { error } = await supabase.storage.from(OFFERS_BUCKET).upload(path, file)
+  if (error) throw error
+  const { data } = supabase.storage.from(OFFERS_BUCKET).getPublicUrl(path)
+  return { path, url: data.publicUrl, name: file.name }
+}
+
+export async function deleteOfferFile(path) {
+  const { error } = await supabase.storage.from(OFFERS_BUCKET).remove([path])
+  if (error) console.error('deleteOfferFile error:', error)
+}
+
 // ── Realtime subscription ─────────────────────────────────────────────────────
 export function dbSubscribe(key, callback) {
   const channel = supabase

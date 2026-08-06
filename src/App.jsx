@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback, useRef } from "react"
+import { useState, useEffect, useCallback, useRef, useMemo } from "react"
 import * as XLSX from "xlsx"
-import { dbGet, dbSet, dbSubscribe } from "./supabase.js"
+import { dbGet, dbSet, dbSubscribe, uploadOfferFile, deleteOfferFile } from "./supabase.js"
 
 // ─── ICONS ───────────────────────────────────────────────────────────────────
 const Icon = ({ d, size = 18, stroke = "currentColor", fill = "none", strokeWidth = 1.6 }) => (
@@ -739,16 +739,18 @@ function VendorsModule() {
   const [budgetItems] = useSharedState("wedding_budget", [])
   const [availability, setAvailability] = useSharedState("wedding_availability", [])
   const [modal, setModal] = useState(null)
-  const emptyVendor = { name: "", category: "Sală / Restaurant", contactPerson: "", phone: "", email: "", status: "de contactat", notes: "", budgetItemId: "", offers: [], attachmentUrl: "" }
+  const emptyVendor = { name: "", category: "Sală / Restaurant", contactPerson: "", phone: "", email: "", status: "de contactat", notes: "", budgetItemId: "", offers: [], attachmentUrl: "", pdfs: [] }
   const [form, setForm] = useState(emptyVendor)
+  const [uploading, setUploading] = useState(false)
+  const fileInputRef = useRef(null)
 
   useLockBodyScroll(Boolean(modal))
 
-  const openAdd = () => { setForm(emptyVendor); setModal("add") }
-  const openEdit = (v) => { setForm({ ...emptyVendor, ...v, offers: v.offers || [] }); setModal(v) }
+  const openAdd = () => { setForm({ ...emptyVendor, id: Date.now() }); setModal("add") }
+  const openEdit = (v) => { setForm({ ...emptyVendor, ...v, offers: v.offers || [], pdfs: v.pdfs || [] }); setModal(v) }
   const save = () => {
     if (!form.name.trim()) return
-    if (modal === "add") setVendors(prev => [...prev, { ...form, id: Date.now() }])
+    if (modal === "add") setVendors(prev => [...prev, form])
     else setVendors(prev => prev.map(v => v.id === modal.id ? { ...modal, ...form } : v))
     setModal(null)
   }
@@ -758,6 +760,29 @@ function VendorsModule() {
   const addOfferRow = () => setForm(p => ({ ...p, offers: [...(p.offers || []), { id: Date.now() + Math.random(), label: "", amount: "" }] }))
   const updateOfferRow = (id, field, value) => setForm(p => ({ ...p, offers: p.offers.map(o => o.id === id ? { ...o, [field]: value } : o) }))
   const removeOfferRow = (id) => setForm(p => ({ ...p, offers: p.offers.filter(o => o.id !== id) }))
+
+  const handlePdfUpload = async (e) => {
+    const files = Array.from(e.target.files || []).filter(f => f.type === "application/pdf")
+    e.target.value = ""
+    if (!files.length) return
+    setUploading(true)
+    try {
+      for (const file of files) {
+        const uploaded = await uploadOfferFile(form.id, file)
+        setForm(p => ({ ...p, pdfs: [...(p.pdfs || []), { id: Date.now() + Math.random(), ...uploaded }] }))
+      }
+    } catch (err) {
+      console.error(err)
+      alert("Eroare la încărcarea PDF-ului. Verifică bucket-ul „oferte” din Supabase Storage.")
+    } finally {
+      setUploading(false)
+    }
+  }
+  const removePdf = (pdf) => {
+    if (!window.confirm("Ștergi acest PDF?")) return
+    setForm(p => ({ ...p, pdfs: (p.pdfs || []).filter(x => x.id !== pdf.id) }))
+    deleteOfferFile(pdf.path)
+  }
 
   const cycleAvailability = (vendorId, date) => {
     const current = availability.find(a => a.vendorId === vendorId && a.date === date)?.status || null
@@ -832,6 +857,9 @@ function VendorsModule() {
                     ))}
                     {budgetItemLabel(v.budgetItemId) && <span style={S.badge("gold")}>💰 {budgetItemLabel(v.budgetItemId)}</span>}
                     {v.attachmentUrl && <a href={v.attachmentUrl} target="_blank" rel="noopener noreferrer" style={{ ...S.badge("purple"), textDecoration: "none" }}>📎 Atașament</a>}
+                    {(v.pdfs || []).map(p => (
+                      <a key={p.id} href={p.url} target="_blank" rel="noopener noreferrer" style={{ ...S.badge("purple"), textDecoration: "none" }}>📄 {p.name}</a>
+                    ))}
                     {v.email && <span style={{ fontSize: 11, color: C.textDim }}>{v.email}</span>}
                   </div>
                   {v.notes && <div style={{ fontSize: 11, color: C.textDim }}>{v.notes}</div>}
@@ -922,6 +950,24 @@ function VendorsModule() {
             <div style={S.formGroup}>
               <label style={S.label}>Link atașament (PDF, poze etc.)</label>
               <input style={S.input} placeholder="link Google Drive, Dropbox, atașament email..." value={form.attachmentUrl} onChange={e => setForm(p => ({ ...p, attachmentUrl: e.target.value }))} />
+            </div>
+            <div style={S.formGroup}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
+                <label style={{ ...S.label, marginBottom: 0 }}>Oferte PDF ({(form.pdfs || []).length})</label>
+                <button style={S.btn("ghost")} onClick={() => fileInputRef.current?.click()} disabled={uploading}>
+                  <PlusIcon /> {uploading ? "Se încarcă..." : "Adaugă PDF"}
+                </button>
+                <input ref={fileInputRef} type="file" accept="application/pdf" multiple style={{ display: "none" }} onChange={handlePdfUpload} />
+              </div>
+              {(form.pdfs || []).length === 0 && <div style={{ fontSize: 12, color: C.textDim }}>Niciun PDF încărcat încă.</div>}
+              {(form.pdfs || []).map(p => (
+                <div key={p.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "7px 10px", background: C.surfaceHi, borderRadius: 8, marginBottom: 6 }}>
+                  <a href={p.url} target="_blank" rel="noopener noreferrer" style={{ color: C.accent, fontSize: 12.5, textDecoration: "none", display: "flex", alignItems: "center", gap: 6, minWidth: 0, overflow: "hidden" }}>
+                    📄 <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>
+                  </a>
+                  <button style={{ ...S.btn("ghost"), padding: "4px 6px", color: C.danger, flexShrink: 0 }} onClick={() => removePdf(p)}><TrashIcon /></button>
+                </div>
+              ))}
             </div>
             <div style={S.formGroup}><label style={S.label}>Note</label><textarea style={{ ...S.input, height: 200, resize: "vertical" }} value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} /></div>
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
@@ -1034,6 +1080,37 @@ function monthGridDays(year, month) {
   return cells
 }
 
+// ─── ROMANIAN LEGAL HOLIDAYS ──────────────────────────────────────────────────
+function orthodoxEasterUTC(year) {
+  const a = year % 4, b = year % 7, c = year % 19
+  const d = (19 * c + 15) % 30
+  const e = (2 * a + 4 * b - d + 34) % 7
+  const month = Math.floor((d + e + 114) / 31)
+  const day = ((d + e + 114) % 31) + 1
+  const julian = new Date(Date.UTC(year, month - 1, day))
+  julian.setUTCDate(julian.getUTCDate() + 13) // Julian → Gregorian offset (valid 1900-2099)
+  return julian
+}
+function getRomanianHolidays(year) {
+  const map = {}
+  const fixed = [
+    [1, 1, "Anul Nou"], [1, 2, "Anul Nou"], [1, 24, "Ziua Unirii Principatelor Române"],
+    [5, 1, "Ziua Muncii"], [6, 1, "Ziua Copilului"], [8, 15, "Adormirea Maicii Domnului"],
+    [11, 30, "Sfântul Andrei"], [12, 1, "Ziua Națională a României"],
+    [12, 25, "Crăciunul"], [12, 26, "A doua zi de Crăciun"],
+  ]
+  fixed.forEach(([m, d, name]) => { map[isoDate(year, m - 1, d)] = name })
+  const easter = orthodoxEasterUTC(year)
+  const addDays = (date, n) => { const d2 = new Date(date); d2.setUTCDate(d2.getUTCDate() + n); return d2 }
+  const toIso = (date) => isoDate(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())
+  map[toIso(addDays(easter, -2))] = "Vinerea Mare"
+  map[toIso(easter)] = "Paștele"
+  map[toIso(addDays(easter, 1))] = "A doua zi de Paște"
+  map[toIso(addDays(easter, 49))] = "Rusaliile"
+  map[toIso(addDays(easter, 50))] = "A doua zi de Rusalii"
+  return map
+}
+
 function AvailabilityModule() {
   const [availability, setAvailability] = useSharedState("wedding_availability", [])
   const [events, setEvents] = useSharedState("wedding_calendar_events", [])
@@ -1066,6 +1143,7 @@ function AvailabilityModule() {
   const dayStatuses = (date) => availability.filter(a => a.date === date)
   const dayEvents = (date) => events.filter(e => e.date === date)
   const dayEventColors = (date) => [...new Set(dayEvents(date).map(e => e.color || "neutral"))]
+  const holidays = useMemo(() => getRomanianHolidays(view.y), [view.y])
   const todayIso = isoDate(today.getFullYear(), today.getMonth(), today.getDate())
   const cells = monthGridDays(view.y, view.m)
   const prevMonth = () => setView(v => v.m === 0 ? { y: v.y - 1, m: 11 } : { y: v.y, m: v.m - 1 })
@@ -1102,19 +1180,22 @@ function AvailabilityModule() {
               const hasLiber = statuses.some(s => s.status === "liber")
               const eventColors = dayEventColors(date)
               const isToday = date === todayIso
+              const holidayName = holidays[date]
               return (
                 <button
                   key={i}
                   onClick={() => setDayModal(date)}
+                  title={holidayName || undefined}
                   style={{
-                    aspectRatio: "1", borderRadius: 10, border: `1.5px solid ${isToday ? C.accent : C.border}`,
-                    background: C.surfaceHi, color: C.textPri, cursor: "pointer", display: "flex", flexDirection: "column",
+                    aspectRatio: "1", borderRadius: 10, border: `1.5px solid ${isToday ? C.accent : holidayName ? C.gold : C.border}`,
+                    background: C.surfaceHi, color: holidayName ? C.gold : C.textPri, cursor: "pointer", display: "flex", flexDirection: "column",
                     alignItems: "center", justifyContent: "center", gap: 3, padding: 2, fontFamily: "inherit"
                   }}
                 >
-                  <span style={{ fontSize: 12, fontWeight: isToday ? 800 : 500 }}>{d}</span>
-                  {(hasLiber || hasOcupat || eventColors.length > 0) && (
+                  <span style={{ fontSize: 12, fontWeight: isToday || holidayName ? 800 : 500 }}>{d}</span>
+                  {(hasLiber || hasOcupat || eventColors.length > 0 || holidayName) && (
                     <div style={{ display: "flex", gap: 2, flexWrap: "wrap", justifyContent: "center", maxWidth: "100%" }}>
+                      {holidayName && <div style={{ width: 5, height: 5, borderRadius: "50%", background: C.gold }} />}
                       {hasLiber && <div style={{ width: 5, height: 5, borderRadius: "50%", background: C.sage }} />}
                       {hasOcupat && <div style={{ width: 5, height: 5, borderRadius: "50%", background: C.danger }} />}
                       {eventColors.map(ck => <div key={ck} style={{ width: 5, height: 5, borderRadius: "50%", background: eventColorHex(ck) }} />)}
@@ -1131,10 +1212,11 @@ function AvailabilityModule() {
         <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) setDayModal(null) }}>
           <div className="modal-box">
             <div className="modal-handle" />
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: holidays[dayModal] ? 4 : 16 }}>
               <div style={S.modalTitle}>{fmtDateRo(dayModal)}</div>
               <button style={{ ...S.btn("ghost"), padding: 4 }} onClick={() => setDayModal(null)}><XIcon /></button>
             </div>
+            {holidays[dayModal] && <div style={{ marginBottom: 16 }}><span style={S.badge("gold")}>🎉 {holidays[dayModal]}</span></div>}
 
             <div style={{ marginBottom: 20 }}>
               <label style={S.label}>Evenimente</label>
