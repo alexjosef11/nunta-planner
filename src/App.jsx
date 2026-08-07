@@ -48,6 +48,8 @@ const GripIcon = ({ size = 16 }) => (
     <circle cx="9" cy="18" r="1.6" /><circle cx="15" cy="18" r="1.6" />
   </svg>
 )
+const MenuIcon = ({ size = 20 }) => <Icon d="M3 6h18M3 12h18M3 18h18" size={size} strokeWidth={2} />
+const ChevronDownIcon = ({ size = 16 }) => <Icon d="M6 9l6 6 6-6" size={size} strokeWidth={2} />
 
 // ─── EXCEL EXPORT ─────────────────────────────────────────────────────────────
 function exportToExcel(sheets, filename) {
@@ -129,6 +131,10 @@ const globalStyles = `
     .modal-box { border-radius: 20px; padding: 24px 26px 26px; border-bottom: 1px solid ${C.border}; max-height: 85vh; box-shadow: 0 24px 70px rgba(0,0,0,0.55); }
     .modal-handle { display: none; }
   }
+  .nav-drawer-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 998; opacity: 0; pointer-events: none; transition: opacity 0.25s ease; }
+  .nav-drawer-overlay.open { opacity: 1; pointer-events: auto; }
+  .nav-drawer-panel { position: fixed; top: 0; left: 0; bottom: 0; width: 78%; max-width: 300px; background: ${C.surface}; border-right: 1px solid ${C.border}; transform: translateX(-100%); transition: transform 0.25s cubic-bezier(.4,0,.2,1); z-index: 999; display: flex; flex-direction: column; box-shadow: 8px 0 40px rgba(0,0,0,0.4); }
+  .nav-drawer-panel.open { transform: translateX(0); }
 `
 
 // ─── STYLES ───────────────────────────────────────────────────────────────────
@@ -138,10 +144,7 @@ const S = {
   topbar: { background: C.surface + "EE", borderBottom: `1px solid ${C.border}`, padding: "0 20px", position: "sticky", top: 0, zIndex: 200, backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)" },
   topbarInner: { maxWidth: 1160, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", height: 56 },
   logo: { display: "flex", alignItems: "center", gap: 8, color: C.accent, fontSize: 16, fontWeight: 700, letterSpacing: "-0.01em" },
-  bottomNav: { position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 200, background: C.surface + "F5", borderTop: `1px solid ${C.border}`, display: "flex", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", paddingBottom: "env(safe-area-inset-bottom, 6px)" },
-  bottomNavBtn: (a) => ({ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3, padding: "10px 4px 8px", border: "none", background: "none", cursor: "pointer", color: a ? C.accent : C.textDim, transition: "color 0.15s" }),
-  bottomNavLabel: (a) => ({ fontSize: 9, fontWeight: a ? 700 : 400, letterSpacing: "0.06em", textTransform: "uppercase", fontFamily: "inherit" }),
-  main: (isMobile) => ({ maxWidth: 1160, margin: "0 auto", padding: isMobile ? "20px 16px 96px" : "28px 24px 48px" }),
+  main: (isMobile) => ({ maxWidth: 1160, margin: "0 auto", padding: isMobile ? "20px 16px 32px" : "28px 24px 48px" }),
   card: { background: C.surface, borderRadius: 18, border: `1px solid ${C.border}`, overflow: "hidden", marginBottom: 14, boxShadow: "0 2px 20px rgba(0,0,0,0.35)" },
   cardHeader: { padding: "16px 20px 12px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" },
   cardTitle: { fontSize: 14, fontWeight: 700, color: C.textPri, letterSpacing: "-0.01em" },
@@ -733,16 +736,91 @@ function fmtDateRo(dateStr) {
 function fmtRON(n) {
   return new Intl.NumberFormat("ro-RO").format(Math.round(parseFloat(n) || 0)) + " RON"
 }
+function totalGuestCount(guests) {
+  return guests.reduce((a, g) => a + 1 + (g.companions?.length || 0), 0)
+}
+
+// ─── BNR EUR/RON RATE ─────────────────────────────────────────────────────────
+const DEFAULT_EUR_RON = 5.08
+function useEurRate() {
+  const [rate, setRate] = useState(DEFAULT_EUR_RON)
+  const [live, setLive] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    const todayIso = new Date().toISOString().slice(0, 10)
+    dbGet("wedding_bnr_rate").then(async (cached) => {
+      if (cached?.date === todayIso && cached?.rate) {
+        if (!cancelled) { setRate(cached.rate); setLive(true) }
+        return
+      }
+      try {
+        const res = await fetch("/.netlify/functions/bnr-rate")
+        if (!res.ok) throw new Error("bnr fetch failed")
+        const data = await res.json()
+        if (!data.rate) throw new Error("no rate")
+        if (!cancelled) { setRate(data.rate); setLive(true) }
+        dbSet("wedding_bnr_rate", { rate: data.rate, date: todayIso })
+      } catch {
+        if (cached?.rate) { if (!cancelled) { setRate(cached.rate); setLive(false) } }
+        else if (!cancelled) setLive(false)
+      }
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+  return { rate, live }
+}
+
+// ─── OFFER PRICING (currency + per-person) ────────────────────────────────────
+function offerAmountRon(offer, guestCount, eurRate) {
+  const amt = parseFloat(offer.amount) || 0
+  const inRon = offer.currency === "EUR" ? amt * eurRate : amt
+  return offer.perPerson ? inRon * guestCount : inRon
+}
+function offerBadgeText(offer, guestCount, eurRate) {
+  const label = offer.label || "Ofertă"
+  const raw = `${offer.amount || 0}${offer.currency === "EUR" ? "€" : " RON"}${offer.perPerson ? "/pers" : ""}`
+  const needsTotal = offer.perPerson || offer.currency === "EUR"
+  const total = needsTotal ? ` → ${fmtRON(offerAmountRon(offer, guestCount, eurRate))}` : ""
+  return `${label}: ${raw}${total}`
+}
+
+function VendorCategoryAccordion({ cat, count, isOpen, onToggle, children }) {
+  const innerRef = useRef(null)
+  const [maxH, setMaxH] = useState(0)
+  useEffect(() => {
+    if (innerRef.current) setMaxH(innerRef.current.scrollHeight)
+  })
+  return (
+    <div style={{ marginBottom: 10 }} data-drag-scope={`vendors-${cat}`}>
+      <button
+        onClick={onToggle}
+        style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", background: C.surfaceHi, border: `1px solid ${C.border}`, borderRadius: 10, padding: "9px 12px", cursor: "pointer", marginBottom: isOpen ? 6 : 0, fontFamily: "inherit" }}
+      >
+        <span style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em", color: C.gold, fontWeight: 700 }}>◆ {cat} <span style={{ color: C.textDim, fontWeight: 600 }}>({count})</span></span>
+        <span style={{ color: C.textDim, display: "flex", transform: isOpen ? "rotate(180deg)" : "none", transition: "transform 0.2s" }}><ChevronDownIcon size={16} /></span>
+      </button>
+      <div style={{ maxHeight: isOpen ? maxH : 0, overflow: "hidden", transition: "max-height 0.25s ease" }}>
+        <div ref={innerRef}>{children}</div>
+      </div>
+    </div>
+  )
+}
 
 function VendorsModule() {
   const [vendors, setVendors, synced] = useSharedState("wedding_vendors", [])
   const [budgetItems] = useSharedState("wedding_budget", [])
   const [availability, setAvailability] = useSharedState("wedding_availability", [])
+  const [guests] = useSharedState("wedding_guests", [])
+  const { rate: eurRate, live: eurLive } = useEurRate()
+  const guestCount = totalGuestCount(guests)
   const [modal, setModal] = useState(null)
   const emptyVendor = { name: "", category: "Sală / Restaurant", contactPerson: "", phone: "", email: "", status: "de contactat", notes: "", budgetItemId: "", offers: [], attachmentUrl: "", pdfs: [] }
   const [form, setForm] = useState(emptyVendor)
   const [uploading, setUploading] = useState(false)
   const fileInputRef = useRef(null)
+  const [openCats, setOpenCats] = useState(() => new Set())
+  const toggleCat = (cat) => setOpenCats(prev => { const next = new Set(prev); next.has(cat) ? next.delete(cat) : next.add(cat); return next })
+  const [matrixCat, setMatrixCat] = useState("all")
 
   useLockBodyScroll(Boolean(modal))
 
@@ -757,7 +835,7 @@ function VendorsModule() {
   const remove = (id) => { if (window.confirm("Ștergi furnizorul?")) setVendors(prev => prev.filter(v => v.id !== id)) }
   const reorderVendor = (fromId, toId) => setVendors(prev => reorderArray(prev, fromId, toId))
 
-  const addOfferRow = () => setForm(p => ({ ...p, offers: [...(p.offers || []), { id: Date.now() + Math.random(), label: "", amount: "" }] }))
+  const addOfferRow = () => setForm(p => ({ ...p, offers: [...(p.offers || []), { id: Date.now() + Math.random(), label: "", amount: "", currency: "RON", perPerson: false }] }))
   const updateOfferRow = (id, field, value) => setForm(p => ({ ...p, offers: p.offers.map(o => o.id === id ? { ...o, [field]: value } : o) }))
   const removeOfferRow = (id) => setForm(p => ({ ...p, offers: p.offers.filter(o => o.id !== id) }))
 
@@ -794,6 +872,9 @@ function VendorsModule() {
   }
   const availDates = [...new Set(availability.map(a => a.date))].sort()
   const vendorsWithAvailability = vendors.filter(v => availability.some(a => a.vendorId === v.id))
+  const matrixVendors = matrixCat === "all" ? vendorsWithAvailability : vendorsWithAvailability.filter(v => v.category === matrixCat)
+  const matrixDates = matrixCat === "all" ? availDates : [...new Set(availability.filter(a => matrixVendors.some(v => v.id === a.vendorId)).map(a => a.date))].sort()
+  const matrixCats = [...new Set(vendorsWithAvailability.map(v => v.category))]
 
   const budgetItemLabel = (id) => {
     const it = budgetItems.find(b => String(b.id) === String(id))
@@ -803,7 +884,7 @@ function VendorsModule() {
   }
 
   const exportVendors = () => {
-    const rows = vendors.map(v => ({ "Nume": v.name, "Categorie": v.category, "Persoană contact": v.contactPerson || "", "Telefon": v.phone || "", "Email": v.email || "", "Status": v.status, "Oferte": (v.offers || []).filter(o => o.amount).map(o => `${o.label || "Ofertă"}: ${fmtRON(o.amount)}`).join("; "), "Atașament": v.attachmentUrl || "", "Cheltuială asociată": budgetItemLabel(v.budgetItemId) || "", "Note": v.notes || "" }))
+    const rows = vendors.map(v => ({ "Nume": v.name, "Categorie": v.category, "Persoană contact": v.contactPerson || "", "Telefon": v.phone || "", "Email": v.email || "", "Status": v.status, "Oferte": (v.offers || []).filter(o => o.amount).map(o => offerBadgeText(o, guestCount, eurRate)).join("; "), "Atașament": v.attachmentUrl || "", "Cheltuială asociată": budgetItemLabel(v.budgetItemId) || "", "Note": v.notes || "" }))
     exportToExcel([{ name: "Furnizori", data: rows.length ? rows : [{ Info: "Niciun furnizor" }] }], "furnizori-nunta.xlsx")
   }
 
@@ -821,7 +902,8 @@ function VendorsModule() {
       <div style={S.card}>
         <div style={S.cardHeader}>
           <span style={S.cardTitle}>Furnizori</span>
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 11, color: C.textDim }}>1 € = {eurRate.toFixed(4)} RON {eurLive ? "(curs BNR azi)" : "(curs aproximativ)"}</span>
             <button style={S.btn("gold")} onClick={exportVendors}><DownloadIcon /></button>
             <button style={S.btn("primary")} onClick={openAdd}><PlusIcon /> Adaugă</button>
           </div>
@@ -830,8 +912,7 @@ function VendorsModule() {
           {!synced && <div style={S.emptyState}><div className="spin" style={{ width: 24, height: 24, border: `2px solid ${C.border}`, borderTopColor: C.accent, borderRadius: "50%", margin: "0 auto" }} /></div>}
           {synced && vendors.length === 0 && <div style={S.emptyState}><div style={{ fontSize: 28, marginBottom: 8, opacity: 0.3 }}>🤝</div><div style={{ fontSize: 13 }}>Adaugă primul furnizor.</div></div>}
           {Object.entries(grouped).map(([cat, its]) => (
-            <div key={cat} style={{ marginBottom: 16 }} data-drag-scope={`vendors-${cat}`}>
-              <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em", color: C.gold, marginBottom: 6, paddingLeft: 2, fontWeight: 700 }}>◆ {cat}</div>
+            <VendorCategoryAccordion key={cat} cat={cat} count={its.length} isOpen={openCats.has(cat)} onToggle={() => toggleCat(cat)}>
               {its.map((v, i) => (
                 <div key={v.id} data-drag-id={v.id} style={{ ...S.row2(i), flexDirection: "column", alignItems: "stretch", gap: 6 }}>
                   <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
@@ -853,7 +934,7 @@ function VendorsModule() {
                   <div style={{ display: "flex", gap: 5, flexWrap: "wrap", alignItems: "center" }}>
                     <span style={S.badge(statusColor(v.status))}>{v.status}</span>
                     {(v.offers || []).filter(o => o.amount).map(o => (
-                      <span key={o.id} style={S.badge("sage")}>💶 {o.label || "Ofertă"}: {fmtRON(o.amount)}</span>
+                      <span key={o.id} style={S.badge("sage")}>💶 {offerBadgeText(o, guestCount, eurRate)}</span>
                     ))}
                     {budgetItemLabel(v.budgetItemId) && <span style={S.badge("gold")}>💰 {budgetItemLabel(v.budgetItemId)}</span>}
                     {v.attachmentUrl && <a href={v.attachmentUrl} target="_blank" rel="noopener noreferrer" style={{ ...S.badge("purple"), textDecoration: "none" }}>📎 Atașament</a>}
@@ -865,45 +946,61 @@ function VendorsModule() {
                   {v.notes && <div style={{ fontSize: 11, color: C.textDim }}>{v.notes}</div>}
                 </div>
               ))}
-            </div>
+            </VendorCategoryAccordion>
           ))}
         </div>
       </div>
 
       <div style={S.card}>
-        <div style={S.cardHeader}>
+        <div style={{ ...S.cardHeader, flexWrap: "wrap" }}>
           <span style={S.cardTitle}>Matrice disponibilitate</span>
-          <span style={{ fontSize: 11, color: C.textDim }}>Bifează aici sau din tab-ul Disponibilitate</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            {matrixCats.length > 1 && (
+              <select style={{ ...S.select, width: "auto", fontSize: 12, padding: "6px 10px" }} value={matrixCat} onChange={e => setMatrixCat(e.target.value)}>
+                <option value="all">Toate categoriile</option>
+                {matrixCats.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            )}
+            <span style={{ fontSize: 11, color: C.textDim }}>Bifează aici sau din tab-ul Disponibilitate</span>
+          </div>
         </div>
-        <div style={{ padding: "10px 20px", overflowX: "auto" }}>
+        <div style={{ padding: "10px 20px" }}>
           {vendors.length === 0 && <div style={{ fontSize: 13, color: C.textDim }}>Adaugă furnizori mai întâi.</div>}
           {vendors.length > 0 && vendorsWithAvailability.length === 0 && <div style={{ fontSize: 13, color: C.textDim }}>Nimic bifat încă — deschide tab-ul Disponibilitate ca să marchezi o dată pentru un furnizor.</div>}
-          {vendorsWithAvailability.length > 0 && (
-            <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 200 + availDates.length * 90 }}>
-              <thead>
-                <tr>
-                  <th style={{ textAlign: "left", padding: "6px 10px 6px 4px", fontSize: 11, color: C.textDim, borderBottom: `1px solid ${C.border}` }}>Furnizor</th>
-                  {availDates.map(d => <th key={d} style={{ padding: "6px 8px", fontSize: 11, color: C.textDim, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>{fmtDateRo(d)}</th>)}
-                </tr>
-              </thead>
-              <tbody>
-                {vendorsWithAvailability.map(v => (
-                  <tr key={v.id}>
-                    <td style={{ padding: "6px 10px 6px 4px", fontSize: 13, fontWeight: 600, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>{v.name}</td>
-                    {availDates.map(d => {
-                      const status = availability.find(a => a.vendorId === v.id && a.date === d)?.status || null
-                      return (
-                        <td key={d} style={{ padding: "4px 8px", textAlign: "center", borderBottom: `1px solid ${C.border}` }}>
-                          <button style={{ ...S.btn(status === "liber" ? "sage" : status === "ocupat" ? "danger" : "outline"), padding: "4px 10px", minWidth: 64, justifyContent: "center" }} onClick={() => cycleAvailability(v.id, d)}>
-                            {status === "liber" ? "Liber" : status === "ocupat" ? "Ocupat" : "—"}
-                          </button>
-                        </td>
-                      )
-                    })}
+          {matrixVendors.length > 0 && (
+            <div style={{ overflow: "auto", maxHeight: 480, border: `1px solid ${C.border}`, borderRadius: 10 }}>
+              <table style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%", minWidth: 140 + matrixDates.length * 44 }}>
+                <thead>
+                  <tr>
+                    <th style={{ position: "sticky", top: 0, left: 0, zIndex: 3, textAlign: "left", padding: "6px 10px", fontSize: 11, color: C.textDim, borderBottom: `1px solid ${C.border}`, background: C.surface, whiteSpace: "nowrap" }}>Furnizor</th>
+                    {matrixDates.map(d => <th key={d} style={{ position: "sticky", top: 0, zIndex: 1, padding: "6px 4px", fontSize: 10, color: C.textDim, borderBottom: `1px solid ${C.border}`, background: C.surface, whiteSpace: "nowrap" }}>{fmtDateRo(d)}</th>)}
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {matrixVendors.map(v => (
+                    <tr key={v.id}>
+                      <td style={{ position: "sticky", left: 0, zIndex: 2, padding: "4px 10px", fontSize: 12, fontWeight: 600, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap", background: C.surface, maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis" }}>{v.name}</td>
+                      {matrixDates.map(d => {
+                        const status = availability.find(a => a.vendorId === v.id && a.date === d)?.status || null
+                        const bg = status === "liber" ? C.sageDim : status === "ocupat" ? C.dangerDim : "transparent"
+                        const fg = status === "liber" ? C.sage : status === "ocupat" ? C.danger : C.textDim
+                        return (
+                          <td key={d} style={{ padding: 2, textAlign: "center", borderBottom: `1px solid ${C.border}` }}>
+                            <button
+                              title={`${v.name} · ${fmtDateRo(d)}: ${status === "liber" ? "Liber" : status === "ocupat" ? "Ocupat" : "Necunoscut"}`}
+                              onClick={() => cycleAvailability(v.id, d)}
+                              style={{ width: 34, height: 26, borderRadius: 6, border: `1px solid ${status ? "transparent" : C.border}`, background: bg, color: fg, cursor: "pointer", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "inherit" }}
+                            >
+                              {status === "liber" ? "✓" : status === "ocupat" ? "✕" : "–"}
+                            </button>
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       </div>
@@ -933,10 +1030,23 @@ function VendorsModule() {
               </div>
               {(form.offers || []).length === 0 && <div style={{ fontSize: 12, color: C.textDim }}>Nicio ofertă notată încă.</div>}
               {(form.offers || []).map(o => (
-                <div key={o.id} style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center" }}>
-                  <input style={{ ...S.input, flex: 2 }} placeholder="ex: Pachet clasic" value={o.label} onChange={e => updateOfferRow(o.id, "label", e.target.value)} />
-                  <input style={{ ...S.input, flex: 1 }} type="number" min={0} placeholder="RON" value={o.amount} onChange={e => updateOfferRow(o.id, "amount", e.target.value)} />
+                <div key={o.id} style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 8, alignItems: "center", background: C.surfaceHi, borderRadius: 8, padding: 8 }}>
+                  <input style={{ ...S.input, flex: "1 1 140px" }} placeholder="ex: Pachet clasic" value={o.label} onChange={e => updateOfferRow(o.id, "label", e.target.value)} />
+                  <input style={{ ...S.input, flex: "1 1 90px" }} type="number" min={0} placeholder="Sumă" value={o.amount} onChange={e => updateOfferRow(o.id, "amount", e.target.value)} />
+                  <select style={{ ...S.select, flex: "0 1 76px" }} value={o.currency || "RON"} onChange={e => updateOfferRow(o.id, "currency", e.target.value)}>
+                    <option value="RON">RON</option>
+                    <option value="EUR">EUR</option>
+                  </select>
+                  <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: C.textSec, cursor: "pointer", flexShrink: 0 }}>
+                    <input type="checkbox" checked={Boolean(o.perPerson)} onChange={e => updateOfferRow(o.id, "perPerson", e.target.checked)} />
+                    per pers.
+                  </label>
                   <button style={{ ...S.btn("ghost"), padding: "4px 6px", color: C.danger }} onClick={() => removeOfferRow(o.id)}><XIcon size={14} /></button>
+                  {(o.perPerson || o.currency === "EUR") && o.amount && (
+                    <div style={{ width: "100%", fontSize: 11, color: C.textDim }}>
+                      = {fmtRON(offerAmountRon(o, guestCount, eurRate))}{o.perPerson ? ` (${guestCount} pers.)` : ""}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -985,11 +1095,14 @@ function VendorsModule() {
 function ComboModule() {
   const [vendors] = useSharedState("wedding_vendors", [])
   const [combos, setCombos] = useSharedState("wedding_combos", [])
+  const [guests] = useSharedState("wedding_guests", [])
+  const { rate: eurRate } = useEurRate()
+  const guestCount = totalGuestCount(guests)
   const [pendingPick, setPendingPick] = useState({})
 
   const offerOptions = vendors.flatMap(v => (v.offers || []).filter(o => o.amount).map(o => ({
-    vendorId: v.id, offerId: o.id, amount: parseFloat(o.amount) || 0,
-    label: `${v.name} — ${o.label || "Ofertă"} (${fmtRON(o.amount)})`
+    vendorId: v.id, offerId: o.id, amount: offerAmountRon(o, guestCount, eurRate),
+    label: `${v.name} — ${o.label || "Ofertă"} (${fmtRON(offerAmountRon(o, guestCount, eurRate))})`
   })))
   const addCombo = () => setCombos(prev => [...prev, { id: Date.now(), name: `Varianta ${prev.length + 1}`, items: [] }])
   const removeCombo = (id) => setCombos(prev => prev.filter(c => c.id !== id))
@@ -1001,7 +1114,7 @@ function ComboModule() {
     const o = v?.offers?.find(oo => String(oo.id) === String(it.offerId))
     return { v, o }
   }
-  const comboTotal = (combo) => (combo.items || []).reduce((sum, it) => { const { o } = findOffer(it); return sum + (o ? parseFloat(o.amount) || 0 : 0) }, 0)
+  const comboTotal = (combo) => (combo.items || []).reduce((sum, it) => { const { o } = findOffer(it); return sum + (o ? offerAmountRon(o, guestCount, eurRate) : 0) }, 0)
 
   return (
     <div className="fadeup">
@@ -1111,6 +1224,53 @@ function getRomanianHolidays(year) {
   return map
 }
 
+// ─── ORTHODOX FASTING PERIODS ─────────────────────────────────────────────────
+function getOrthodoxFastingDays(year) {
+  const map = {}
+  const easter = orthodoxEasterUTC(year)
+  const addDays = (date, n) => { const d2 = new Date(date); d2.setUTCDate(d2.getUTCDate() + n); return d2 }
+  const toIso = (date) => isoDate(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())
+  const inRange = (date, start, end) => start <= end && date >= start && date <= end
+
+  const greatLent = { start: addDays(easter, -48), end: addDays(easter, -1), label: "Postul Mare (Postul Paștelui)" }
+  const apostlesFast = { start: addDays(easter, 57), end: new Date(Date.UTC(year, 5, 28)), label: "Postul Sfinților Apostoli Petru și Pavel" }
+  const dormitionFast = { start: new Date(Date.UTC(year, 7, 1)), end: new Date(Date.UTC(year, 7, 14)), label: "Postul Adormirii Maicii Domnului" }
+  const nativityFast = { start: new Date(Date.UTC(year, 10, 15)), end: new Date(Date.UTC(year, 11, 24)), label: "Postul Nașterii Domnului (Postul Crăciunului)" }
+  const majorRanges = [greatLent, apostlesFast, dormitionFast, nativityFast]
+
+  const brightWeek = { start: easter, end: addDays(easter, 6), label: "Săptămâna Luminată — nu se fac nunți" }
+  const noWeddingRanges = [brightWeek]
+
+  const cheesefareWeek = { start: addDays(easter, -55), end: addDays(easter, -49) }
+  const afterPentecostWeek = { start: addDays(easter, 49), end: addDays(easter, 55) }
+  const xmasFree = { start: new Date(Date.UTC(year, 11, 25)), end: new Date(Date.UTC(year, 11, 31)) }
+  const epiphanyFree = { start: new Date(Date.UTC(year, 0, 1)), end: new Date(Date.UTC(year, 0, 6)) }
+  const freeWeeks = [cheesefareWeek, brightWeek, afterPentecostWeek, xmasFree, epiphanyFree]
+
+  let cursor = new Date(Date.UTC(year, 0, 1))
+  const yearEnd = new Date(Date.UTC(year, 11, 31))
+  while (cursor <= yearEnd) {
+    const iso = toIso(cursor)
+    const majorHit = majorRanges.find(r => inRange(cursor, r.start, r.end))
+    if (majorHit) {
+      map[iso] = { type: "major", label: majorHit.label }
+    } else {
+      const noWedHit = noWeddingRanges.find(r => inRange(cursor, r.start, r.end))
+      if (noWedHit) {
+        map[iso] = { type: "noWedding", label: noWedHit.label }
+      } else {
+        const weekday = cursor.getUTCDay()
+        if (weekday === 3 || weekday === 5) {
+          const isFreeWeek = freeWeeks.some(r => inRange(cursor, r.start, r.end))
+          if (!isFreeWeek) map[iso] = { type: "weekly", label: weekday === 3 ? "Zi de post (miercuri)" : "Zi de post (vineri)" }
+        }
+      }
+    }
+    cursor = addDays(cursor, 1)
+  }
+  return map
+}
+
 function AvailabilityModule() {
   const [availability, setAvailability] = useSharedState("wedding_availability", [])
   const [events, setEvents] = useSharedState("wedding_calendar_events", [])
@@ -1144,6 +1304,7 @@ function AvailabilityModule() {
   const dayEvents = (date) => events.filter(e => e.date === date)
   const dayEventColors = (date) => [...new Set(dayEvents(date).map(e => e.color || "neutral"))]
   const holidays = useMemo(() => getRomanianHolidays(view.y), [view.y])
+  const fasting = useMemo(() => getOrthodoxFastingDays(view.y), [view.y])
   const todayIso = isoDate(today.getFullYear(), today.getMonth(), today.getDate())
   const cells = monthGridDays(view.y, view.m)
   const prevMonth = () => setView(v => v.m === 0 ? { y: v.y - 1, m: 11 } : { y: v.y, m: v.m - 1 })
@@ -1168,6 +1329,11 @@ function AvailabilityModule() {
         </div>
         <div style={{ padding: "14px 20px" }}>
           {vendors.length === 0 && <div style={{ fontSize: 13, color: C.textDim, marginBottom: 12 }}>Poți nota evenimente pe orice zi. Adaugă și furnizori în tab-ul Furnizori ca să poți bifa disponibilitate.</div>}
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 10, fontSize: 10.5, color: C.textDim }}>
+            <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 8, height: 8, borderRadius: "50%", background: C.gold }} /> Sărbătoare legală</span>
+            <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 8, height: 8, borderRadius: 2, background: C.purpleDim, border: `1px solid ${C.purple}` }} /> Post mare</span>
+            <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 8, height: 8, borderRadius: "50%", background: C.textDim }} /> Zi de post (Mie/Vin)</span>
+          </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4, marginBottom: 6 }}>
             {RO_WEEKDAYS.map(w => <div key={w} style={{ textAlign: "center", fontSize: 10, color: C.textDim, fontWeight: 700, textTransform: "uppercase" }}>{w}</div>)}
           </div>
@@ -1181,21 +1347,25 @@ function AvailabilityModule() {
               const eventColors = dayEventColors(date)
               const isToday = date === todayIso
               const holidayName = holidays[date]
+              const fast = fasting[date]
+              const fastBg = fast?.type === "major" ? C.purpleDim : fast?.type === "noWedding" ? "rgba(192,132,168,0.14)" : C.surfaceHi
+              const titleParts = [holidayName, fast?.label].filter(Boolean)
               return (
                 <button
                   key={i}
                   onClick={() => setDayModal(date)}
-                  title={holidayName || undefined}
+                  title={titleParts.length ? titleParts.join(" · ") : undefined}
                   style={{
                     aspectRatio: "1", borderRadius: 10, border: `1.5px solid ${isToday ? C.accent : holidayName ? C.gold : C.border}`,
-                    background: C.surfaceHi, color: holidayName ? C.gold : C.textPri, cursor: "pointer", display: "flex", flexDirection: "column",
+                    background: fastBg, color: holidayName ? C.gold : fast?.type === "major" || fast?.type === "noWedding" ? C.purple : C.textPri, cursor: "pointer", display: "flex", flexDirection: "column",
                     alignItems: "center", justifyContent: "center", gap: 3, padding: 2, fontFamily: "inherit"
                   }}
                 >
                   <span style={{ fontSize: 12, fontWeight: isToday || holidayName ? 800 : 500 }}>{d}</span>
-                  {(hasLiber || hasOcupat || eventColors.length > 0 || holidayName) && (
+                  {(hasLiber || hasOcupat || eventColors.length > 0 || holidayName || fast?.type === "weekly") && (
                     <div style={{ display: "flex", gap: 2, flexWrap: "wrap", justifyContent: "center", maxWidth: "100%" }}>
                       {holidayName && <div style={{ width: 5, height: 5, borderRadius: "50%", background: C.gold }} />}
+                      {fast?.type === "weekly" && <div style={{ width: 5, height: 5, borderRadius: "50%", background: C.textDim }} />}
                       {hasLiber && <div style={{ width: 5, height: 5, borderRadius: "50%", background: C.sage }} />}
                       {hasOcupat && <div style={{ width: 5, height: 5, borderRadius: "50%", background: C.danger }} />}
                       {eventColors.map(ck => <div key={ck} style={{ width: 5, height: 5, borderRadius: "50%", background: eventColorHex(ck) }} />)}
@@ -1212,11 +1382,16 @@ function AvailabilityModule() {
         <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) setDayModal(null) }}>
           <div className="modal-box">
             <div className="modal-handle" />
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: holidays[dayModal] ? 4 : 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: (holidays[dayModal] || fasting[dayModal]) ? 4 : 16 }}>
               <div style={S.modalTitle}>{fmtDateRo(dayModal)}</div>
               <button style={{ ...S.btn("ghost"), padding: 4 }} onClick={() => setDayModal(null)}><XIcon /></button>
             </div>
-            {holidays[dayModal] && <div style={{ marginBottom: 16 }}><span style={S.badge("gold")}>🎉 {holidays[dayModal]}</span></div>}
+            {(holidays[dayModal] || fasting[dayModal]) && (
+              <div style={{ marginBottom: 16, display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {holidays[dayModal] && <span style={S.badge("gold")}>🎉 {holidays[dayModal]}</span>}
+                {fasting[dayModal] && <span style={S.badge(fasting[dayModal].type === "weekly" ? "neutral" : "purple")}>🕊️ {fasting[dayModal].label}</span>}
+              </div>
+            )}
 
             <div style={{ marginBottom: 20 }}>
               <label style={S.label}>Evenimente</label>
@@ -1742,6 +1917,7 @@ const TABS = [
 export default function App() {
   const [tab, setTab] = useState("guests")
   const [syncing, setSyncing] = useState(false)
+  const [menuOpen, setMenuOpen] = useState(false)
   const isMobile = useIsMobile()
 
   // inject global styles once
@@ -1754,6 +1930,8 @@ export default function App() {
     }
   }, [])
 
+  useLockBodyScroll(menuOpen)
+
   const activeTab = TABS.find(t => t.id === tab)
 
   return (
@@ -1761,10 +1939,17 @@ export default function App() {
       {/* Top bar */}
       <header style={S.topbar}>
         <div style={S.topbarInner}>
-          <div style={S.logo}>
-            <HeartIcon size={18} />
-            <span>Nuntă</span>
-          </div>
+          {isMobile ? (
+            <button onClick={() => setMenuOpen(true)} style={{ display: "flex", alignItems: "center", gap: 10, background: "none", border: "none", cursor: "pointer", color: C.textPri, padding: 0, fontFamily: "inherit" }}>
+              <MenuIcon />
+              <span style={{ fontSize: 15, fontWeight: 700, letterSpacing: "-0.02em" }}>{activeTab?.label}</span>
+            </button>
+          ) : (
+            <div style={S.logo}>
+              <HeartIcon size={18} />
+              <span>Nuntă</span>
+            </div>
+          )}
 
           {/* Desktop nav */}
           {!isMobile && (
@@ -1779,8 +1964,6 @@ export default function App() {
               })}
             </nav>
           )}
-
-          {isMobile && <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: "-0.02em" }}>{activeTab?.label}</div>}
 
           <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: C.textDim }}>
             <div style={S.syncDot(true)} />
@@ -1800,23 +1983,27 @@ export default function App() {
         {tab === "budget"  && <BudgetModule />}
       </main>
 
-      {/* Bottom nav — mobile only */}
+      {/* Nav drawer — mobile only */}
       {isMobile && (
-        <nav style={S.bottomNav}>
-          {TABS.map(t => {
-            const a = tab === t.id
-            return (
-              <button key={t.id} style={S.bottomNavBtn(a)} onClick={() => setTab(t.id)}>
-                <div style={{ position: "relative" }}>
-                  {a && <div style={{ position: "absolute", inset: -7, borderRadius: 12, background: "rgba(192,132,168,0.14)" }} />}
-                  <div style={{ position: "relative" }}><t.Icon size={22} /></div>
-                </div>
-                <span style={S.bottomNavLabel(a)}>{t.label}</span>
-                {a && <div style={{ width: 4, height: 4, borderRadius: "50%", background: C.accent, marginTop: 1 }} />}
-              </button>
-            )
-          })}
-        </nav>
+        <>
+          <div className={`nav-drawer-overlay${menuOpen ? " open" : ""}`} onClick={() => setMenuOpen(false)} />
+          <div className={`nav-drawer-panel${menuOpen ? " open" : ""}`}>
+            <div style={{ padding: "18px 18px 14px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div style={S.logo}><HeartIcon size={18} /><span>Nuntă</span></div>
+              <button style={{ ...S.btn("ghost"), padding: 4 }} onClick={() => setMenuOpen(false)}><XIcon /></button>
+            </div>
+            <nav style={{ flex: 1, overflowY: "auto", padding: 10 }}>
+              {TABS.map(t => {
+                const a = tab === t.id
+                return (
+                  <button key={t.id} onClick={() => { setTab(t.id); setMenuOpen(false) }} style={{ display: "flex", alignItems: "center", gap: 12, width: "100%", padding: "12px 14px", borderRadius: 10, border: "none", cursor: "pointer", fontSize: 14, fontWeight: a ? 700 : 500, fontFamily: "inherit", background: a ? "rgba(192,132,168,0.14)" : "transparent", color: a ? C.accent : C.textSec, marginBottom: 2, textAlign: "left" }}>
+                    <t.Icon size={18} />{t.label}
+                  </button>
+                )
+              })}
+            </nav>
+          </div>
+        </>
       )}
     </div>
   )
